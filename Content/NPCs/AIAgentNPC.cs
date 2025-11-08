@@ -554,7 +554,7 @@ namespace TerrarAI.Content.NPCs
 
                     _replanContext = failureReason;
                     State = AgentState.Replanning;
-                    UpdateStatus("Replanning due to failure...", forceNetUpdate: true);
+                    UpdateStatus("Replanning due to failure...");
                     BeginPlanning();
                     break;
             }

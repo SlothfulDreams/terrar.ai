@@ -9,11 +9,13 @@ namespace TerrarAI.Content.Actions
     {
         private readonly Vector2 _targetPixels;
         private readonly float _tolerance;
+        private readonly float _speed;
 
-        public MoveAction(Vector2 targetPixels, float tolerance = 32f)
+        public MoveAction(Vector2 targetPixels, float tolerance = 32f, float speed = 4f)
         {
             _targetPixels = targetPixels;
             _tolerance = tolerance;
+            _speed = speed;
         }
 
         public override string Name => "move";
