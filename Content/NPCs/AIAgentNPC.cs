@@ -49,6 +49,34 @@ namespace TerrarAI.Content.NPCs
         private long _planningStartTick;
         private long _maxPlanningTicks;
 
+        // Follower AI - Teleportation and stuck detection
+        private int _stuckTimer = 0;
+        private Vector2 _lastPosition = Vector2.Zero;
+        private int _teleportCooldown = 0;
+
+        // Follower AI - Distance zone constants
+        private const float IDLE_DISTANCE = 50f;
+        private const float FOLLOW_DISTANCE = 200f;
+        private const float CATCHUP_DISTANCE = 500f;
+        private const float TELEPORT_DISTANCE = 500f;
+
+        // Follower AI - Speed settings
+        private const float IDLE_SPEED = 1f;
+        private const float FOLLOW_SPEED = 4f;
+        private const float CATCHUP_SPEED = 7f;
+
+        // Follower AI - Acceleration
+        private const float ACCELERATION = 0.3f;
+        private const float DECELERATION = 0.7f;
+
+        // Follower AI - Teleport settings
+        private const int STUCK_FRAMES_TO_TELEPORT = 300; // 5 seconds at 60 FPS
+        private const int TELEPORT_COOLDOWN_FRAMES = 60; // 1 second
+
+        // Follower AI - Vertical movement
+        private const float CLIMB_HEIGHT_THRESHOLD = 48f; // 3 tiles
+        private const float FALL_HEIGHT_THRESHOLD = 32f; // 2 tiles
+
         // Conversation history for ReAct pattern memory
         private readonly List<(string role, string content)> _conversationHistory = new();
         private const int MAX_HISTORY_MESSAGES = 20; // Last 10 exchanges (user+assistant pairs)
@@ -383,41 +411,70 @@ namespace TerrarAI.Content.NPCs
                 return;
             }
 
-            const float followDistance = 100f;
-            const float stopDistance = 50f;
-
-            float distanceX = target.Center.X - NPC.Center.X;
-            float distanceY = target.Center.Y - NPC.Center.Y;
-            float distance = (float)Math.Sqrt(distanceX * distanceX + distanceY * distanceY);
-
-            // If within stop distance, slow down
-            if (distance < stopDistance)
+            if (_teleportCooldown > 0)
             {
-                NPC.velocity.X *= IdleFriction;
+                _teleportCooldown--;
+            }
+
+            float distance = Vector2.Distance(NPC.Center, target.Center);
+
+            if (distance > TELEPORT_DISTANCE && _teleportCooldown == 0)
+            {
+                TeleportToPlayer(target);
                 ApplyGravityAndCollision();
                 return;
             }
 
-            // If beyond follow distance, move toward player
-            if (distance > followDistance)
+            if (distance > IDLE_DISTANCE)
             {
-                // Calculate target speed based on player speed
-                float targetSpeed = Math.Max(target.velocity.Length(), 3f);
-                targetSpeed = Math.Min(targetSpeed, 6f);
+                Vector2 currentPos = NPC.Center;
+                float movementThisFrame = Vector2.Distance(currentPos, _lastPosition);
 
-                // Move horizontally toward target
-                float moveDirection = Math.Sign(distanceX);
-                NPC.velocity.X = moveDirection * targetSpeed;
+                if (movementThisFrame < 0.5f && distance > IDLE_DISTANCE)
+                {
+                    _stuckTimer++;
+                }
+                else
+                {
+                    _stuckTimer = 0;
+                }
 
-                // Check for obstacles and jump
-                CheckAndJump(moveDirection);
+                _lastPosition = currentPos;
+
+                if (_stuckTimer >= STUCK_FRAMES_TO_TELEPORT && _teleportCooldown == 0)
+                {
+                    TeleportToPlayer(target);
+                    ApplyGravityAndCollision();
+                    return;
+                }
             }
             else
             {
-                NPC.velocity.X *= IdleFriction;
+                _stuckTimer = 0;
+                _lastPosition = NPC.Center;
             }
 
-            ApplyGravityAndCollision();
+            if (distance < IDLE_DISTANCE)
+            {
+                NPC.velocity.X *= DECELERATION;
+                ApplyGravityAndCollision();
+            }
+            else if (distance < FOLLOW_DISTANCE)
+            {
+                SmoothMoveToward(target.Center, FOLLOW_SPEED, ACCELERATION);
+                ApplyGravityAndCollision();
+            }
+            else if (distance < CATCHUP_DISTANCE)
+            {
+                float catchupSpeed = Math.Min(CATCHUP_SPEED, target.velocity.Length() + 2f);
+                SmoothMoveToward(target.Center, catchupSpeed, ACCELERATION * 1.5f);
+                ApplyGravityAndCollision();
+            }
+            else
+            {
+                SmoothMoveToward(target.Center, CATCHUP_SPEED, ACCELERATION * 2f);
+                ApplyGravityAndCollision();
+            }
         }
 
         private void ApplyGravityAndCollision()
@@ -432,6 +489,60 @@ namespace TerrarAI.Content.NPCs
         private void CheckAndJump(float moveDirection)
         {
             MovementHelper.TryJump(NPC, moveDirection, 0f);
+        }
+
+        private void TeleportToPlayer(Player target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            Vector2? teleportPos = MovementHelper.FindValidTeleportPosition(target);
+            if (teleportPos.HasValue)
+            {
+                NPC.position = teleportPos.Value - new Vector2(NPC.width / 2f, NPC.height / 2f);
+                NPC.velocity = Vector2.Zero;
+                _stuckTimer = 0;
+                _teleportCooldown = TELEPORT_COOLDOWN_FRAMES;
+
+                if (Main.netMode != NetmodeID.MultiplayerClient)
+                {
+                    SoundEngine.PlaySound(SoundID.Item6, NPC.position);
+                }
+            }
+        }
+
+        private void SmoothMoveToward(Vector2 targetPosition, float maxSpeed, float accelRate)
+        {
+            float distanceX = targetPosition.X - NPC.Center.X;
+            float distanceY = targetPosition.Y - NPC.Center.Y;
+
+            float desiredVelocityX = 0f;
+            if (Math.Abs(distanceX) > 10f)
+            {
+                desiredVelocityX = Math.Sign(distanceX) * maxSpeed;
+            }
+
+            NPC.velocity.X = MathHelper.Lerp(NPC.velocity.X, desiredVelocityX, accelRate);
+
+            bool onGround = MovementHelper.IsOnGround(NPC);
+
+            if (distanceY < -CLIMB_HEIGHT_THRESHOLD && onGround)
+            {
+                MovementHelper.TryJump(NPC, NPC.velocity.X, distanceY);
+            }
+
+            if (distanceY > FALL_HEIGHT_THRESHOLD && onGround && ShouldFallThroughPlatform())
+            {
+                NPC.position.Y += 1f;
+                NPC.velocity.Y = 1f;
+            }
+        }
+
+        private bool ShouldFallThroughPlatform()
+        {
+            return MovementHelper.IsStandingOnPlatform(NPC);
         }
 
         private void UpdateFacing()

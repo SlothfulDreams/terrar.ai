@@ -63,5 +63,70 @@ namespace TerrarAI.Content.Systems
             npc.velocity.Y = jumpVelocity;
             return true;
         }
+
+        public static bool HasGapAhead(NPC npc, int direction, int aheadPixels = 24)
+        {
+            if (npc == null || direction == 0)
+            {
+                return false;
+            }
+
+            int checkX = (int)((npc.Center.X + direction * aheadPixels) / 16f);
+            int footY = (int)((npc.Bottom.Y) / 16f);
+
+            var floorTile = Framing.GetTileSafely(checkX, footY);
+
+            return !floorTile.HasTile || !Main.tileSolid[floorTile.TileType];
+        }
+
+        public static bool IsStandingOnPlatform(NPC npc)
+        {
+            if (npc == null)
+            {
+                return false;
+            }
+
+            int centerX = (int)(npc.Center.X / 16f);
+            int footY = (int)((npc.Bottom.Y + 4f) / 16f);
+
+            var tile = Framing.GetTileSafely(centerX, footY);
+
+            return tile.HasTile && Main.tileSolidTop[tile.TileType];
+        }
+
+        public static Vector2? FindValidTeleportPosition(Player player, int offsetDistance = 64)
+        {
+            if (player == null)
+            {
+                return null;
+            }
+
+            int[] offsets = { -offsetDistance, offsetDistance, -offsetDistance * 2, offsetDistance * 2 };
+
+            foreach (int xOffset in offsets)
+            {
+                Vector2 testPosition = player.Center + new Vector2(xOffset, 0);
+                int tileX = (int)(testPosition.X / 16f);
+                int tileY = (int)(testPosition.Y / 16f);
+
+                bool validPosition = true;
+                for (int y = tileY - 1; y <= tileY + 2; y++)
+                {
+                    var tile = Framing.GetTileSafely(tileX, y);
+                    if (tile.HasTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
+                    {
+                        validPosition = false;
+                        break;
+                    }
+                }
+
+                if (validPosition)
+                {
+                    return new Vector2(testPosition.X, player.Center.Y);
+                }
+            }
+
+            return player.Center + new Vector2(-offsetDistance, 0);
+        }
     }
 }
