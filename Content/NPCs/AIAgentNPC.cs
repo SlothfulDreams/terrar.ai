@@ -70,13 +70,11 @@ namespace TerrarAI.Content.NPCs
             NPC.dontTakeDamage = true;
             NPC.dontTakeDamageFromHostiles = true;
             NPC.lifeMax = 250;
-            NPC.friendly = true;
-            NPC.aiStyle = NPCAIStyleID.Fighter;
-            AIType = NPCID.Zombie; // Use Zombie AI reference (doesn't flee during daytime)
-            AnimationType = NPCID.Zombie;
+            NPC.aiStyle = -1; // Custom AI
             NPC.noGravity = false;
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
+            NPC.damage = 0;
         }
 
         public override void OnSpawn(IEntitySource source)
@@ -187,7 +185,7 @@ namespace TerrarAI.Content.NPCs
             switch (State)
             {
                 case AgentState.Idle:
-                    ApplyIdlePhysics();
+                    PerformFollowPlayerAI();
                     break;
                 case AgentState.Planning:
                     TickPlanning();
@@ -351,6 +349,101 @@ namespace TerrarAI.Content.NPCs
         private void ApplyIdlePhysics()
         {
             NPC.velocity.X *= IdleFriction;
+        }
+
+        private void PerformFollowPlayerAI()
+        {
+            Player? target = null;
+            if (_commander?.active == true && !_commander.dead)
+            {
+                target = _commander;
+            }
+            else
+            {
+                NPC.TargetClosest(false);
+                var candidate = Main.player[NPC.target];
+                if (candidate.active && !candidate.dead)
+                {
+                    target = candidate;
+                }
+            }
+
+            if (target == null)
+            {
+                ApplyIdlePhysics();
+                ApplyGravityAndCollision();
+                return;
+            }
+
+            const float followDistance = 100f;
+            const float stopDistance = 50f;
+            
+            float distanceX = target.Center.X - NPC.Center.X;
+            float distanceY = target.Center.Y - NPC.Center.Y;
+            float distance = (float)Math.Sqrt(distanceX * distanceX + distanceY * distanceY);
+
+            // If within stop distance, slow down
+            if (distance < stopDistance)
+            {
+                NPC.velocity.X *= IdleFriction;
+                ApplyGravityAndCollision();
+                return;
+            }
+
+            // If beyond follow distance, move toward player
+            if (distance > followDistance)
+            {
+                // Calculate target speed based on player speed
+                float targetSpeed = Math.Max(target.velocity.Length(), 3f);
+                targetSpeed = Math.Min(targetSpeed, 6f);
+
+                // Move horizontally toward target
+                float moveDirection = Math.Sign(distanceX);
+                NPC.velocity.X = moveDirection * targetSpeed;
+
+                // Check for obstacles and jump
+                CheckAndJump(moveDirection);
+            }
+            else
+            {
+                NPC.velocity.X *= IdleFriction;
+            }
+
+            ApplyGravityAndCollision();
+        }
+
+        private void ApplyGravityAndCollision()
+        {
+            NPC.velocity.Y += 0.4f;
+            if (NPC.velocity.Y > 10f)
+            {
+                NPC.velocity.Y = 10f;
+            }
+        }
+
+        private void CheckAndJump(float moveDirection)
+        {
+            // Check if on ground
+            bool onGround = Collision.SolidCollision(NPC.position + new Vector2(0, NPC.height), NPC.width, 4);
+            
+            if (!onGround)
+            {
+                return;
+            }
+
+            // Check for wall ahead
+            int tileX = (int)((NPC.Center.X + moveDirection * 16) / 16f);
+            int tileY = (int)((NPC.Bottom.Y - 8) / 16f);
+
+            Tile tile = Framing.GetTileSafely(tileX, tileY);
+            Tile tileAbove = Framing.GetTileSafely(tileX, tileY - 1);
+            
+            // Jump if there's a wall in front or a step up
+            if ((tile.HasTile && Main.tileSolid[tile.TileType]) || 
+                (tileAbove.HasTile && Main.tileSolid[tileAbove.TileType]))
+            {
+                NPC.velocity.Y = -8f; // Jump
+            }
         }
 
         private void UpdateFacing()
