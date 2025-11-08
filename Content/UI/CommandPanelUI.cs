@@ -7,6 +7,7 @@ using Terraria.GameContent.UI.Elements;
 using Terraria.GameInput;
 using Terraria.ID;
 using Terraria.UI;
+using TerrarAIMod = TerrarAI.TerrarAI;
 
 namespace TerrarAI.Content.UI
 {
@@ -56,25 +57,13 @@ namespace TerrarAI.Content.UI
             _panel.Append(_statusText);
         }
 
-        public void FocusInput()
-        {
-            _inputField.Focus();
-        }
+        public void FocusInput() => _inputField.Focus();
 
-        public void UnfocusInput()
-        {
-            _inputField.Unfocus();
-        }
+        public void UnfocusInput() => _inputField.Unfocus();
 
-        public void ClearInput()
-        {
-            _inputField.SetText(string.Empty);
-        }
+        public void ClearInput() => _inputField.SetText(string.Empty);
 
-        public void ShowDefaultStatus()
-        {
-            SetStatus(DefaultStatus, Color.LightGray);
-        }
+        public void ShowDefaultStatus() => SetStatus(DefaultStatus, Color.LightGray);
 
         public void SetStatus(string text, Color color)
         {
@@ -138,17 +127,30 @@ namespace TerrarAI.Content.UI
 
             internal void Focus()
             {
+                if (_focused)
+                {
+                    return;
+                }
+
                 _focused = true;
+                Main.clrInput();
                 PlayerInput.WritingText = true;
                 Main.instance?.HandleIME();
+                TerrarAIMod.LogInfo("CommandInputField focused.");
             }
 
             internal void Unfocus()
             {
+                if (!_focused)
+                {
+                    return;
+                }
+
                 _focused = false;
                 PlayerInput.WritingText = false;
                 Main.blockInput = false;
                 UpdateDisplayedText();
+                TerrarAIMod.LogInfo("CommandInputField unfocused.");
             }
 
             public override void LeftClick(UIMouseEvent evt)

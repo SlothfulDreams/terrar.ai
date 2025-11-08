@@ -16,6 +16,8 @@ namespace TerrarAI
 
             if (!Main.dedServ)
             {
+                // tModLoader expects default key names that match the XNA enum casing (e.g. "J").
+                // Using lowercase "j" caused it to fall back to "Unbound", so keep the label lowercase but register with "J".
                 CommandKeybind = KeybindLoader.RegisterKeybind(this, "Open Command Panel", "J");
             }
 
