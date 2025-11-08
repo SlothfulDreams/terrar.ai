@@ -6,11 +6,27 @@ namespace TerrarAI.Content.Actions
     public abstract class AgentAction
     {
         private bool _hasEntered;
+        
+        public bool Cancelled { get; private set; }
 
         public abstract string Name { get; }
+        
+        public void Cancel()
+        {
+            if (!Cancelled)
+            {
+                Cancelled = true;
+                OnCancel();
+            }
+        }
 
         internal AgentActionResult Tick(AgentActionContext context)
         {
+            if (Cancelled)
+            {
+                return AgentActionResult.Failure("Action was cancelled");
+            }
+            
             if (!_hasEntered)
             {
                 OnEnter(context);
@@ -31,6 +47,11 @@ namespace TerrarAI.Content.Actions
         public virtual void Reset()
         {
             _hasEntered = false;
+            Cancelled = false;
+        }
+        
+        protected virtual void OnCancel()
+        {
         }
 
         /// <summary>

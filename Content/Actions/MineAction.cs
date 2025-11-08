@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
 using TerrarAI.Content.NPCs;
@@ -10,6 +11,10 @@ namespace TerrarAI.Content.Actions
 {
     public sealed class MineAction : TileTargetAction
     {
+        private enum Phase { CheckingRange, MovingToTarget, Mining }
+        
+        private Phase _phase = Phase.CheckingRange;
+        private MoveAction? _moveAction;
         private int _damageAccumulated;
         private Item? _currentPickaxe;
         private bool _initialized;
@@ -29,10 +34,18 @@ namespace TerrarAI.Content.Actions
         public override void Reset()
         {
             base.Reset();
+            _phase = Phase.CheckingRange;
+            _moveAction = null;
             _damageAccumulated = 0;
             _currentPickaxe = null;
             _initialized = false;
             _slowMiningToggle = false;
+        }
+        
+        protected override void OnCancel()
+        {
+            base.OnCancel();
+            _moveAction?.Cancel();
         }
 
         protected override AgentActionResult OnTick(AgentActionContext context)
@@ -42,6 +55,71 @@ namespace TerrarAI.Content.Actions
                 return AgentActionResult.Failure("MineAction must run on the server.");
             }
 
+            // Handle multi-phase execution
+            switch (_phase)
+            {
+                case Phase.CheckingRange:
+                    return HandleCheckingRange(context);
+                    
+                case Phase.MovingToTarget:
+                    return HandleMovingToTarget(context);
+                    
+                case Phase.Mining:
+                    return HandleMining(context);
+                    
+                default:
+                    return AgentActionResult.Failure("Invalid phase");
+            }
+        }
+
+        private AgentActionResult HandleCheckingRange(AgentActionContext context)
+        {
+            var targetPos = GetTileWorldCenter();
+            var distance = Vector2.Distance(context.Agent.Center, targetPos);
+
+            if (distance <= GetRequiredRange())
+            {
+                // Already in range, proceed to mining
+                _phase = Phase.Mining;
+                return AgentActionResult.Pending($"In range ({distance:F0}px), starting mining...");
+            }
+            else
+            {
+                // Need to move closer first
+                _moveAction = new MoveAction(targetPos);
+                _phase = Phase.MovingToTarget;
+                return AgentActionResult.Pending($"Target {distance:F0}px away, moving closer first...");
+            }
+        }
+
+        private AgentActionResult HandleMovingToTarget(AgentActionContext context)
+        {
+            if (_moveAction == null)
+            {
+                return AgentActionResult.Failure("MoveAction is null");
+            }
+
+            var moveResult = _moveAction.Tick(context);
+
+            if (moveResult.Status == AgentActionStatus.Success)
+            {
+                // Movement succeeded, proceed to mining
+                _phase = Phase.Mining;
+                _moveAction = null;
+                return AgentActionResult.Pending("Arrived at target, starting mining...");
+            }
+            else if (moveResult.Status == AgentActionStatus.Failure)
+            {
+                // Movement failed, can't mine
+                return AgentActionResult.Failure($"Could not reach target: {moveResult.Message}");
+            }
+
+            // Still moving...
+            return moveResult;
+        }
+
+        private AgentActionResult HandleMining(AgentActionContext context)
+        {
             // STABILITY CHECK: Wait for agent to stop moving before starting mining
             if (!_initialized)
             {
@@ -189,8 +267,33 @@ namespace TerrarAI.Content.Actions
             return _slowMiningToggle ? 1 : 0;
         }
 
-        public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
+        public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator, WorldContext? worldContext = null, NPC? agent = null)
         {
+            // Check for natural language "target" parameter
+            if (parameters.TryGetProperty("target", out var targetElement) && targetElement.ValueKind == JsonValueKind.String)
+            {
+                var target = targetElement.GetString();
+                if (target != null && worldContext != null && agent != null)
+                {
+                    // Handle "nearest_X" pattern
+                    if (target.StartsWith("nearest_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var resourceType = target.Substring("nearest_".Length);
+                        var nearestTile = worldContext.FindNearest(resourceType, agent.Center);
+                        
+                        if (nearestTile.HasValue)
+                        {
+                            return new MineAction(nearestTile.Value);
+                        }
+                        else
+                        {
+                            throw new ActionParserException($"Could not find any {resourceType} nearby");
+                        }
+                    }
+                }
+            }
+            
+            // Standard tile coordinate parsing
             var tileX = ActionParameterReader.ReadInt(parameters, "tileX");
             var tileY = ActionParameterReader.ReadInt(parameters, "tileY");
             var clamped = validator.ClampTilePosition(tileX, tileY);

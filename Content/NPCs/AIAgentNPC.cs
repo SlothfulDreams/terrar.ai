@@ -993,13 +993,13 @@ namespace TerrarAI.Content.NPCs
 
             sb.AppendLine();
             sb.AppendLine("AVAILABLE ACTIONS:");
-            sb.AppendLine("- move(x, y): Move toward absolute pixel coordinates. Agent will automatically approach targets before mining/placing.");
+            sb.AppendLine("- move(x, y): Move toward absolute pixel coordinates. Actions automatically move you to targets first.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
-            sb.AppendLine("- mine(tileX, tileY): Mine/chop the tile at absolute grid coordinates. Auto-selects correct tool (axe for trees, pickaxe for stone/ore).");
-            sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood).");
-            sb.AppendLine("- complete(message): Signal that the task is finished. Use this when you have accomplished the player's request.");
-            sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative to your position).");
-            sb.AppendLine("- Agent reach: 5 tiles (80 pixels). Actions fail if target is too far.");
+            sb.AppendLine("- mine(target OR tileX, tileY): Mine/chop a tile. Can use 'target: nearest_trees' or explicit coordinates. Auto-moves and selects correct tool.");
+            sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood). Auto-moves first.");
+            sb.AppendLine("- complete(message): Signal that the task is finished.");
+            sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
+            sb.AppendLine("- Mine and place actions automatically move you into range first - no need for separate move actions!");
 
             sb.AppendLine();
             sb.AppendLine("CURRENT STATE:");
@@ -1009,19 +1009,16 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine();
             sb.AppendLine(DescribeInventory());
             sb.AppendLine();
-            sb.AppendLine(DescribeNearbyResources());
-            sb.AppendLine();
-            sb.AppendLine(DescribeNearbyTiles());
-            sb.AppendLine();
-            sb.AppendLine($"Nearby players: {DescribeNearbyPlayers()}");
+            
+            // Use simplified WorldContext for environment info
+            var worldContext = new WorldContext(NPC);
+            sb.Append(worldContext.GetContextSummary());
 
             sb.AppendLine();
             sb.AppendLine("IMPORTANT RULES:");
-            sb.AppendLine("- Use ABSOLUTE coordinates (not offsets like +5 or -3)");
-            sb.AppendLine("- Tile descriptions include pixel coordinates - use them directly for move actions");
-            sb.AppendLine("- Check NEARBY RESOURCES section for available resources with coordinates");
-            sb.AppendLine("- Check tool requirements - mining ore/stone needs appropriate pickaxe power");
-            sb.AppendLine("- Plan movement BEFORE mining/placing if target is not marked REACHABLE");
+            sb.AppendLine("- Use natural language targets when available: mine({\"target\": \"nearest_trees\"}) instead of explicit coords");
+            sb.AppendLine("- Check YOUR SITUATION for available resources nearby");
+            sb.AppendLine("- Mine/place actions auto-move you to targets - NO need for separate move actions!");
             sb.AppendLine("- Return ONLY ONE action per response using the ReAct format");
             sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown");
             sb.AppendLine("- Use 'complete' action when the task is finished");

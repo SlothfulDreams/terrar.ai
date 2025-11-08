@@ -22,12 +22,15 @@ namespace TerrarAI.Content.Systems
 
             validator.EnsureServerOrThrow();
 
+            // Create WorldContext for natural language parameter support
+            var worldContext = new WorldContext(agent);
+
             using var document = JsonDocument.Parse(json);
 
             // Try ReAct format first: {"observation": "...", "thought": "...", "action": {...}, "complete": false}
             if (document.RootElement.TryGetProperty("action", out var actionElement))
             {
-                return ParseReActFormat(document.RootElement, validator);
+                return ParseReActFormat(document.RootElement, validator, worldContext, agent);
             }
 
             // Fallback to legacy format: {"actions": [{...}, {...}]}
@@ -53,7 +56,7 @@ namespace TerrarAI.Content.Systems
                 var type = typeElement.GetString()?.ToLowerInvariant() ?? string.Empty;
                 var parameters = ActionParameterReader.GetParams(element);
 
-                var action = ActionRegistry.Create(type, parameters, validator);
+                var action = ActionRegistry.Create(type, parameters, validator, worldContext, agent);
                 actions.Add(action);
             }
 
@@ -65,7 +68,7 @@ namespace TerrarAI.Content.Systems
             return actions;
         }
 
-        private static IReadOnlyList<AgentAction> ParseReActFormat(JsonElement root, ActionValidator validator)
+        private static IReadOnlyList<AgentAction> ParseReActFormat(JsonElement root, ActionValidator validator, WorldContext worldContext, NPC agent)
         {
             // Extract observation and thought (optional, for logging/debugging)
             var observation = root.TryGetProperty("observation", out var obsElement) && obsElement.ValueKind == JsonValueKind.String
@@ -96,7 +99,7 @@ namespace TerrarAI.Content.Systems
             var type = typeElement.GetString()?.ToLowerInvariant() ?? string.Empty;
             var parameters = ActionParameterReader.GetParams(actionElement);
 
-            var action = ActionRegistry.Create(type, parameters, validator);
+            var action = ActionRegistry.Create(type, parameters, validator, worldContext, agent);
 
             return new List<AgentAction> { action };
         }
