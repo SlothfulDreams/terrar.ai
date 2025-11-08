@@ -52,6 +52,10 @@ namespace TerrarAI.Content.NPCs
         private readonly ConcurrentQueue<string> _thoughtChunks = new();
         private readonly StringBuilder _accumulatedResponse = new();
 
+        // Batch network updates
+        private int _ticksSinceLastNetUpdate;
+        private const int MinTicksBetweenNetUpdates = 15;
+
         // Rendering
         private readonly AIAgentRenderer _renderer = new();
 
@@ -59,6 +63,8 @@ namespace TerrarAI.Content.NPCs
         {
             Main.npcFrameCount[Type] = 1;
         }
+
+        public override string Texture => "Terraria/Images/NPC_0";
 
         public override void SetDefaults()
         {
@@ -223,7 +229,10 @@ namespace TerrarAI.Content.NPCs
 
                 _stateBacking = (int)value;
                 NPC.ai[0] = _stateBacking;
+                
+                // State changes always force network update
                 NPC.netUpdate = true;
+                _ticksSinceLastNetUpdate = 0;
             }
         }
 
@@ -367,7 +376,7 @@ namespace TerrarAI.Content.NPCs
                 var actions = ActionParser.Parse(response, NPC, _validator, _commander);
                 QueueActions(actions);
                 State = AgentState.Executing;
-                UpdateStatus("Executing plan...");
+                UpdateStatus("Executing plan...", forceNetUpdate: true);
                 SendChatMessage($"Planning complete! Executing {actions.Count} action(s).", Color.LightGreen);
             }
             catch (ActionParserException ex)
@@ -387,7 +396,7 @@ namespace TerrarAI.Content.NPCs
                 if (_actionQueue.Count == 0)
                 {
                     State = AgentState.Completed;
-                    UpdateStatus("Plan complete.");
+                    UpdateStatus("Plan complete.", forceNetUpdate: true);
                     return;
                 }
 
@@ -419,18 +428,29 @@ namespace TerrarAI.Content.NPCs
                     if (_actionQueue.Count == 0)
                     {
                         State = AgentState.Completed;
-                        UpdateStatus("Plan complete.");
+                        UpdateStatus("Plan complete.", forceNetUpdate: true);
                     }
                     break;
                 case AgentActionStatus.Failure:
                     var failureReason = result.Message ?? "Action failed.";
+                    var actionName = _currentAction.Name;
                     _currentAction.Reset();
                     _currentAction = null;
-                    _actionQueue.Clear();
 
-                    _replanContext = failureReason;
+                    // Try partial replanning: skip failed action and continue if failure is recoverable
+                    if (IsRecoverableFailure(failureReason) && _actionQueue.Count > 0)
+                    {
+                        SendChatMessage($"{actionName} failed: {failureReason}. Skipping and continuing...", Color.Yellow);
+                        UpdateStatus($"Skipped failed action, continuing...");
+                        break;
+                    }
+
+                    // Critical failure: full replan
+                    _actionQueue.Clear();
+                    _replanContext = $"{actionName} failed: {failureReason}";
                     State = AgentState.Replanning;
-                    UpdateStatus("Replanning due to failure...");
+                    UpdateStatus("Replanning due to failure...", forceNetUpdate: true);
+                    SendChatMessage($"Critical failure, replanning...", Color.OrangeRed);
                     BeginPlanning();
                     break;
             }
@@ -445,6 +465,39 @@ namespace TerrarAI.Content.NPCs
             }
 
             UpdateStatus($"Queued {_actionQueue.Count} actions.");
+        }
+
+        private bool IsRecoverableFailure(string failureReason)
+        {
+            if (string.IsNullOrWhiteSpace(failureReason))
+            {
+                return false;
+            }
+
+            var reason = failureReason.ToLowerInvariant();
+
+            // Recoverable: minor issues that don't affect subsequent actions
+            if (reason.Contains("already") || 
+                reason.Contains("not found") ||
+                reason.Contains("no tile") ||
+                reason.Contains("tile already") ||
+                reason.Contains("cannot place"))
+            {
+                return true;
+            }
+
+            // Critical: issues that likely affect the entire plan
+            if (reason.Contains("out of range") ||
+                reason.Contains("too far") ||
+                reason.Contains("unreachable") ||
+                reason.Contains("blocked") ||
+                reason.Contains("timeout"))
+            {
+                return false;
+            }
+
+            // Default: treat unknown failures as recoverable to avoid excessive replanning
+            return true;
         }
 
         private void BeginPlanning()
@@ -618,7 +671,7 @@ namespace TerrarAI.Content.NPCs
             return closePlayers.Any() ? string.Join(", ", closePlayers) : "No nearby players";
         }
 
-        private void UpdateStatus(string message)
+        private void UpdateStatus(string message, bool forceNetUpdate = false)
         {
             if (string.IsNullOrWhiteSpace(message))
             {
@@ -633,7 +686,12 @@ namespace TerrarAI.Content.NPCs
             _statusMessage = message;
             if (Main.netMode == NetmodeID.Server)
             {
-                NPC.netUpdate = true;
+                _ticksSinceLastNetUpdate++;
+                if (forceNetUpdate || _ticksSinceLastNetUpdate >= MinTicksBetweenNetUpdates)
+                {
+                    NPC.netUpdate = true;
+                    _ticksSinceLastNetUpdate = 0;
+                }
             }
         }
     }
