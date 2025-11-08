@@ -19,6 +19,15 @@ using Terraria.ModLoader;
 
 namespace TerrarAI.Content.NPCs
 {
+    public enum AgentState
+    {
+        Idle,
+        Planning,
+        Executing,
+        Replanning,
+        Completed
+    }
+
     public sealed class AIAgentNPC : ModNPC
     {
         private readonly Queue<AgentAction> _actionQueue = new();
@@ -43,8 +52,8 @@ namespace TerrarAI.Content.NPCs
         private readonly ConcurrentQueue<string> _thoughtChunks = new();
         private readonly StringBuilder _accumulatedResponse = new();
 
-        // Player appearance clone (stored for rendering as player)
-        private Player? _appearanceClone;
+        // Rendering
+        private readonly AIAgentRenderer _renderer = new();
 
         public override void SetStaticDefaults()
         {
@@ -74,48 +83,10 @@ namespace TerrarAI.Content.NPCs
             State = AgentState.Idle;
             _statusMessage = "Awaiting command";
 
-            // Clone player appearance if spawned by a player
             if (source is EntitySource_Parent parent && parent.Entity is Player player)
             {
-                ClonePlayerAppearance(player);
+                _renderer.ClonePlayerAppearance(player);
             }
-        }
-
-        private void ClonePlayerAppearance(Player sourcePlayer)
-        {
-            // Create a dummy player object for rendering
-            _appearanceClone = new Player();
-
-            // Copy visual appearance
-            _appearanceClone.skinVariant = sourcePlayer.skinVariant;
-            _appearanceClone.hair = sourcePlayer.hair;
-            _appearanceClone.hairDye = sourcePlayer.hairDye;
-            _appearanceClone.hairColor = sourcePlayer.hairColor;
-            _appearanceClone.skinColor = sourcePlayer.skinColor;
-            _appearanceClone.eyeColor = sourcePlayer.eyeColor;
-            _appearanceClone.shirtColor = sourcePlayer.shirtColor;
-            _appearanceClone.underShirtColor = sourcePlayer.underShirtColor;
-            _appearanceClone.pantsColor = sourcePlayer.pantsColor;
-            _appearanceClone.shoeColor = sourcePlayer.shoeColor;
-
-            // Copy equipment/armor for visuals
-            for (int i = 0; i < sourcePlayer.armor.Length; i++)
-            {
-                _appearanceClone.armor[i] = sourcePlayer.armor[i].Clone();
-            }
-            for (int i = 0; i < sourcePlayer.dye.Length; i++)
-            {
-                _appearanceClone.dye[i] = sourcePlayer.dye[i].Clone();
-            }
-
-            // Set male/female
-            _appearanceClone.Male = sourcePlayer.Male;
-        }
-
-        // Public method to set player appearance (can be called externally)
-        public void SetPlayerAppearance(Player player)
-        {
-            ClonePlayerAppearance(player);
         }
 
         public override bool PreAI()
@@ -137,16 +108,9 @@ namespace TerrarAI.Content.NPCs
         {
             if (!ServerAuthority.IsServer)
             {
-                // Client copies state via net sync; keep visuals simple.
                 NPC.velocity *= IdleFriction;
                 UpdateFacing();
                 return;
-            }
-
-            // Diagnostic logging - only log when Planning to reduce spam
-            if (State == AgentState.Planning)
-            {
-                Mod.Logger.Info($"[AI] Called. State={State}, _stateBacking={_stateBacking}, NPC.ai[0]={NPC.ai[0]}, IsServer={ServerAuthority.IsServer}");
             }
 
             switch (State)
@@ -154,16 +118,14 @@ namespace TerrarAI.Content.NPCs
                 case AgentState.Idle:
                     break;
                 case AgentState.Planning:
+                case AgentState.Replanning:
                     TickPlanning();
                     break;
                 case AgentState.Executing:
                     TickExecuting();
                     break;
-                case AgentState.Replanning:
-                    TickReplanning();
-                    break;
                 case AgentState.Completed:
-                    ApplyIdlePhysics();
+                    NPC.velocity.X *= IdleFriction;
                     if (_actionQueue.Count == 0 && _currentAction == null && _plannerTask == null)
                     {
                         State = AgentState.Idle;
@@ -178,63 +140,18 @@ namespace TerrarAI.Content.NPCs
 
         public override bool PreDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
         {
-            // If we have a player appearance clone, draw as player
-            if (_appearanceClone != null)
+            if (_renderer.HasAppearance)
             {
-                DrawAsPlayer(spriteBatch, screenPos, drawColor);
-                return false; // Prevent default NPC drawing
+                _renderer.DrawAsPlayer(NPC, spriteBatch, screenPos, drawColor);
+                return false;
             }
 
-            return true; // Use default drawing if no appearance clone
-        }
-
-        private void DrawAsPlayer(SpriteBatch spriteBatch, Vector2 screenPos, Color lightColor)
-        {
-            if (_appearanceClone == null) return;
-
-            // Update the clone's position and direction to match NPC
-            _appearanceClone.position = NPC.position;
-            _appearanceClone.direction = NPC.direction;
-            _appearanceClone.velocity = NPC.velocity;
-            _appearanceClone.fullRotation = 0f;
-            _appearanceClone.fullRotationOrigin = Vector2.Zero;
-
-            // Set animation frame based on movement
-            if (Math.Abs(NPC.velocity.X) > 0.1f)
-            {
-                _appearanceClone.legFrame.Y = (int)((Main.GameUpdateCount / 7) % 20) * 56; // Walking animation
-            }
-            else
-            {
-                _appearanceClone.legFrame.Y = 0; // Standing
-            }
-            _appearanceClone.bodyFrame.Y = _appearanceClone.legFrame.Y;
-            _appearanceClone.headFrame.Y = 0;
-
-            // Use official tModLoader player renderer
-            Main.PlayerRenderer.DrawPlayer(Main.Camera, _appearanceClone, NPC.position, 0f, Vector2.Zero, 0f);
+            return true;
         }
 
         public override void PostDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
         {
-            var stateText = State.ToString();
-            var messageText = string.IsNullOrWhiteSpace(_statusMessage) ? "Ready" : _statusMessage;
-
-            var combined = $"{stateText}: {messageText}";
-            var font = FontAssets.MouseText.Value;
-            var measurement = font.MeasureString(combined);
-            var drawPosition = NPC.Top - screenPos - new Vector2(measurement.X * 0.5f, 24f);
-
-            var color = State switch
-            {
-                AgentState.Planning => Color.CornflowerBlue,
-                AgentState.Executing => Color.LimeGreen,
-                AgentState.Replanning => Color.Orange,
-                AgentState.Completed => Color.LightGray,
-                _ => Color.White
-            };
-
-            Utils.DrawBorderString(spriteBatch, combined, drawPosition, color, 0.9f);
+            _renderer.DrawStatusText(NPC, State, _statusMessage, spriteBatch, screenPos);
         }
 
         public override void SendExtraAI(BinaryWriter writer)
@@ -311,11 +228,6 @@ namespace TerrarAI.Content.NPCs
         }
 
         private int _stateBacking;
-
-        private void ApplyIdlePhysics()
-        {
-            NPC.velocity.X *= IdleFriction;
-        }
 
         private void AssignFollowTarget()
         {
@@ -415,7 +327,6 @@ namespace TerrarAI.Content.NPCs
                 return;
             }
 
-            // Process streaming thought chunks
             while (_thoughtChunks.TryDequeue(out var chunk))
             {
                 var config = TerrarAI_Config.Get();
@@ -425,12 +336,8 @@ namespace TerrarAI.Content.NPCs
                 }
             }
 
-            // Diagnostic logging
-            Mod.Logger.Info($"[TickPlanning] Task status: IsCompleted={_plannerTask.IsCompleted}, IsFaulted={_plannerTask.IsFaulted}, IsCanceled={_plannerTask.IsCanceled}, Status={_plannerTask.Status}");
-
             if (!_plannerTask.IsCompleted)
             {
-                // Check for planning timeout
                 long elapsedTicks = Main.GameUpdateCount - _planningStartTick;
                 if (elapsedTicks > _maxPlanningTicks)
                 {
@@ -441,56 +348,36 @@ namespace TerrarAI.Content.NPCs
 
                 long elapsedSeconds = elapsedTicks / 60;
                 UpdateStatus($"Planning with xAI... ({elapsedSeconds}s)");
-                ApplyIdlePhysics();
-                Mod.Logger.Info("[TickPlanning] Still waiting for task completion...");
+                NPC.velocity.X *= IdleFriction;
                 return;
             }
-
-            Mod.Logger.Info("[TickPlanning] Task completed! Parsing response...");
 
             if (_plannerTask.IsFaulted)
             {
                 var error = _plannerTask.Exception?.GetBaseException().Message ?? "Unknown planning error.";
-                Mod.Logger.Error($"[TickPlanning] Task faulted: {error}");
                 HandlePlannerFailure(error);
                 return;
             }
 
             var response = _plannerTask.Result;
-            Mod.Logger.Info($"[TickPlanning] Got response, length={response.Length}");
             _plannerTask = null;
 
             try
             {
-                Mod.Logger.Info($"[TickPlanning] Parsing response: {response}");
                 var actions = ActionParser.Parse(response, NPC, _validator, _commander);
                 QueueActions(actions);
                 State = AgentState.Executing;
                 UpdateStatus("Executing plan...");
                 SendChatMessage($"Planning complete! Executing {actions.Count} action(s).", Color.LightGreen);
-                Mod.Logger.Info($"[TickPlanning] Successfully transitioned to Executing state with {actions.Count} actions");
             }
             catch (ActionParserException ex)
             {
-                Mod.Logger.Error($"[TickPlanning] ActionParserException: {ex.Message}");
                 HandlePlannerFailure($"Parser error: {ex.Message}");
             }
             catch (Exception ex)
             {
-                Mod.Logger.Error($"[TickPlanning] Unexpected exception: {ex}");
                 HandlePlannerFailure($"Unexpected error: {ex.Message}");
             }
-        }
-
-        private void TickReplanning()
-        {
-            if (_plannerTask == null)
-            {
-                BeginPlanning();
-                return;
-            }
-
-            TickPlanning();
         }
 
         private void TickExecuting()
@@ -590,24 +477,19 @@ namespace TerrarAI.Content.NPCs
         {
             try
             {
-                Mod.Logger.Info("[ExecutePlanningAsync] Starting...");
                 var systemPrompt = BuildSystemPrompt();
                 var userPrompt = BuildUserPrompt(_currentCommand!, _replanContext);
 
-                // Stream the response and accumulate it
                 await foreach (var chunk in TerrarAI.RequireClient().SendChatCompletionStreamAsync(systemPrompt, userPrompt, CancellationToken.None).ConfigureAwait(false))
                 {
                     _thoughtChunks.Enqueue(chunk);
                     _accumulatedResponse.Append(chunk);
                 }
 
-                var result = _accumulatedResponse.ToString();
-                Mod.Logger.Info($"[ExecutePlanningAsync] Completed! Result length={result.Length}, content={result}");
-                return result;
+                return _accumulatedResponse.ToString();
             }
             catch (Exception ex)
             {
-                Mod.Logger.Error($"[ExecutePlanningAsync] Exception: {ex}");
                 throw new InvalidOperationException($"xAI request failed: {ex.Message}", ex);
             }
         }
