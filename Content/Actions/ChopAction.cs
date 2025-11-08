@@ -19,15 +19,23 @@ namespace TerrarAI.Content.Actions
         private Item? _currentAxe;
         private bool _initialized;
         private bool _slowChoppingToggle;
+        private int _lastProgressCheckTick;
+        private int _lastDamageAmount;
+        private const int PROGRESS_CHECK_INTERVAL = 120; // 2 seconds
 
         public ChopAction(Point tile) : base(tile)
         {
             _damageAccumulated = 0;
             _initialized = false;
             _slowChoppingToggle = false;
+            _lastProgressCheckTick = 0;
+            _lastDamageAmount = 0;
         }
 
         public override string Name => "chop";
+
+        // Override timeout for chopping actions - allow up to 15 seconds
+        protected override int MaxExecutionTicks => 900;
 
         public override float GetRequiredRange() => 32f;  // 2 tiles = 32 pixels
 
@@ -40,6 +48,8 @@ namespace TerrarAI.Content.Actions
             _currentAxe = null;
             _initialized = false;
             _slowChoppingToggle = false;
+            _lastProgressCheckTick = 0;
+            _lastDamageAmount = 0;
         }
 
         protected override void OnCancel()
@@ -143,8 +153,14 @@ namespace TerrarAI.Content.Actions
             {
                 _initialized = true;
 
-                context.Agent.velocity.X = 0f;
-                context.Agent.velocity.Y = 0f;
+                // Maintain minimal velocity for stepSpeed to work (allows stepping over 1-tile obstacles)
+                const float MIN_STEP_VELOCITY = 0.15f;
+                if (Math.Abs(context.Agent.velocity.X) < MIN_STEP_VELOCITY)
+                {
+                    context.Agent.velocity.X = context.Agent.direction * MIN_STEP_VELOCITY;
+                }
+                context.Agent.velocity.X *= 0.9f;  // Gentle friction
+                context.Agent.velocity.Y *= 0.9f;
 
                 // Check if tile exists
                 var tile = Framing.GetTileSafely(Tile.X, Tile.Y);
@@ -182,9 +198,9 @@ namespace TerrarAI.Content.Actions
                     $"Drifted out of range while chopping (now {currentDistance:F0}px away, max {GetRequiredRange()}px). Position unstable.");
             }
 
-            // RE-ZERO VELOCITY each tick to combat any drift
-            MovementHelper.ApplyFriction(context.Agent, 0.8f);
-            context.Agent.velocity.Y *= 0.5f;
+            // Apply gentle friction while maintaining minimal velocity for stepSpeed
+            MovementHelper.ApplyFriction(context.Agent, 0.3f);  // Lighter friction
+            context.Agent.velocity.Y *= 0.95f;  // Gentle Y dampening
 
             // Check if tile still exists
             var currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
@@ -201,6 +217,28 @@ namespace TerrarAI.Content.Actions
             // Calculate chopping damage based on axe power
             int damagePerTick = CalculateChoppingDamage(_currentAxe.axe);
             _damageAccumulated += damagePerTick;
+
+            // Progress validation: Detect if chopping is stalled (no progress for 2 seconds)
+            if (_damageAccumulated > 0 && _damageAccumulated % 30 == 0)
+            {
+                if (_damageAccumulated == _lastDamageAmount)
+                {
+                    // No progress since last check
+                    _lastProgressCheckTick++;
+                    if (_lastProgressCheckTick >= PROGRESS_CHECK_INTERVAL / 30)
+                    {
+                        return AgentActionResult.Failure(
+                            $"Chopping stalled at {_damageAccumulated}% for {PROGRESS_CHECK_INTERVAL / 60f:F1}s. " +
+                            $"Tree may be protected or axe power insufficient.");
+                    }
+                }
+                else
+                {
+                    // Progress detected, reset stall counter
+                    _lastProgressCheckTick = 0;
+                    _lastDamageAmount = _damageAccumulated;
+                }
+            }
 
             // Trigger swing animation periodically
             if (_damageAccumulated % 30 == 0 && context.Agent.ModNPC is AIAgentNPC agent)
@@ -262,8 +300,20 @@ namespace TerrarAI.Content.Actions
             var tileX = ActionParameterReader.ReadInt(parameters, "tileX");
             var tileY = ActionParameterReader.ReadInt(parameters, "tileY");
             var clamped = validator.ClampTilePosition(tileX, tileY);
+
+            // AUTO-CORRECT to tree center if this is a tree tile
+            // Trees can be multi-column (up to 3 tiles wide). We need to find the CENTER column.
+            // According to Terraria: "cutting at the lowermost center tile will destroy the entire tree"
+            if (TreeHelper.IsTreeTile(clamped))
+            {
+                var treeCenter = TreeHelper.FindTreeCenter(clamped);
+                if (treeCenter.HasValue)
+                {
+                    clamped = treeCenter.Value;
+                }
+            }
+
             return new ChopAction(clamped);
         }
     }
 }
-

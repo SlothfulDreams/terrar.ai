@@ -6,11 +6,18 @@ namespace TerrarAI.Content.Actions
     public abstract class AgentAction
     {
         private bool _hasEntered;
-        
+        private int _tickCount;
+
         public bool Cancelled { get; private set; }
 
         public abstract string Name { get; }
-        
+
+        /// <summary>
+        /// Maximum number of ticks this action can execute before timing out.
+        /// Default is 600 ticks (10 seconds). Override to customize per action type.
+        /// </summary>
+        protected virtual int MaxExecutionTicks => 600;
+
         public void Cancel()
         {
             if (!Cancelled)
@@ -26,7 +33,15 @@ namespace TerrarAI.Content.Actions
             {
                 return AgentActionResult.Failure("Action was cancelled");
             }
-            
+
+            // Increment tick counter and check for timeout
+            _tickCount++;
+            if (_tickCount > MaxExecutionTicks)
+            {
+                return AgentActionResult.Failure(
+                    $"{Name} action timed out after {MaxExecutionTicks / 60f:F1}s. Target may be unreachable or task impossible.");
+            }
+
             if (!_hasEntered)
             {
                 OnEnter(context);
@@ -48,8 +63,9 @@ namespace TerrarAI.Content.Actions
         {
             _hasEntered = false;
             Cancelled = false;
+            _tickCount = 0;
         }
-        
+
         protected virtual void OnCancel()
         {
         }
