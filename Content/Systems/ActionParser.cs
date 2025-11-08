@@ -25,9 +25,16 @@ namespace TerrarAI.Content.Systems
 
             using var document = JsonDocument.Parse(json);
 
+            // Try ReAct format first: {"observation": "...", "thought": "...", "action": {...}, "complete": false}
+            if (document.RootElement.TryGetProperty("action", out var actionElement))
+            {
+                return ParseReActFormat(document.RootElement, validator);
+            }
+
+            // Fallback to legacy format: {"actions": [{...}, {...}]}
             if (!document.RootElement.TryGetProperty("actions", out var actionsElement) || actionsElement.ValueKind != JsonValueKind.Array)
             {
-                throw new ActionParserException("Expected 'actions' array at the root of the JSON payload.");
+                throw new ActionParserException("Expected 'action' object (ReAct format) or 'actions' array (legacy format) at the root of the JSON payload.");
             }
 
             var actions = new List<AgentAction>(actionsElement.GetArrayLength());
@@ -59,6 +66,42 @@ namespace TerrarAI.Content.Systems
             return actions;
         }
 
+        private static IReadOnlyList<AgentAction> ParseReActFormat(JsonElement root, ActionValidator validator)
+        {
+            // Extract observation and thought (optional, for logging/debugging)
+            var observation = root.TryGetProperty("observation", out var obsElement) && obsElement.ValueKind == JsonValueKind.String
+                ? obsElement.GetString()
+                : null;
+
+            var thought = root.TryGetProperty("thought", out var thoughtElement) && thoughtElement.ValueKind == JsonValueKind.String
+                ? thoughtElement.GetString()
+                : null;
+
+            // Log the agent's reasoning if available
+            if (!string.IsNullOrWhiteSpace(thought))
+            {
+                TerrarAI.LogInfo($"[Agent Thought] {thought}");
+            }
+
+            // Parse the single action
+            if (!root.TryGetProperty("action", out var actionElement) || actionElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new ActionParserException("ReAct format requires an 'action' object.");
+            }
+
+            if (!actionElement.TryGetProperty("type", out var typeElement) || typeElement.ValueKind != JsonValueKind.String)
+            {
+                throw new ActionParserException("Action is missing a valid 'type' string.");
+            }
+
+            var type = typeElement.GetString()?.ToLowerInvariant() ?? string.Empty;
+            var parameters = GetParams(actionElement);
+
+            var action = CreateAction(type, parameters, validator);
+
+            return new List<AgentAction> { action };
+        }
+
         private static AgentAction CreateAction(string type, JsonElement parameters, ActionValidator validator)
         {
             return type switch
@@ -67,6 +110,7 @@ namespace TerrarAI.Content.Systems
                 "move" => CreateMoveAction(parameters, validator),
                 "mine" => CreateMineAction(parameters, validator),
                 "place" => CreatePlaceAction(parameters, validator),
+                "complete" => new CompleteAction(ReadString(parameters, "message", required: false)),
                 _ => throw new ActionParserException($"Unknown action type '{type}'.")
             };
         }

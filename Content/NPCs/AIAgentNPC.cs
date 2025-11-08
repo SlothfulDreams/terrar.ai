@@ -37,11 +37,14 @@ namespace TerrarAI.Content.NPCs
 
         private string? _currentCommand;
         private string? _replanContext;
+        private string? _previousActionResult;  // Tracks result of last completed action for prompt chaining
+        private int _replanCycleCount;  // Tracks number of replan cycles to prevent infinite loops
         private string _statusMessage = "Idle";
         private string? _lastPlannerError;
         private Player? _commander;
 
         private const float IdleFriction = 0.85f;
+        private const int MAX_REPLAN_CYCLES = 25;  // Maximum replanning attempts before forcing completion
 
         // Planning timeout tracking
         private long _planningStartTick;
@@ -198,7 +201,8 @@ namespace TerrarAI.Content.NPCs
                     break;
                 case AgentState.Completed:
                     ApplyIdlePhysics();
-                    if (_actionQueue.Count == 0 && _currentAction == null && _plannerTask == null)
+                    _plannerTask = null;  // Safety: ensure planner task is cleared
+                    if (_actionQueue.Count == 0 && _currentAction == null)
                     {
                         State = AgentState.Idle;
                         UpdateStatus("Idle");
@@ -301,6 +305,8 @@ namespace TerrarAI.Content.NPCs
             _commander = commander;
             _currentCommand = command.Trim();
             _replanContext = null;
+            _previousActionResult = null;
+            _replanCycleCount = 0;  // Reset replan counter for new task
             _lastPlannerError = null;
 
             _actionQueue.Clear();
@@ -377,7 +383,7 @@ namespace TerrarAI.Content.NPCs
 
             const float followDistance = 100f;
             const float stopDistance = 50f;
-            
+
             float distanceX = target.Center.X - NPC.Center.X;
             float distanceY = target.Center.Y - NPC.Center.Y;
             float distance = (float)Math.Sqrt(distanceX * distanceX + distanceY * distanceY);
@@ -425,7 +431,7 @@ namespace TerrarAI.Content.NPCs
         {
             // Check if on ground
             bool onGround = Collision.SolidCollision(NPC.position + new Vector2(0, NPC.height), NPC.width, 4);
-            
+
             if (!onGround)
             {
                 return;
@@ -437,9 +443,9 @@ namespace TerrarAI.Content.NPCs
 
             Tile tile = Framing.GetTileSafely(tileX, tileY);
             Tile tileAbove = Framing.GetTileSafely(tileX, tileY - 1);
-            
+
             // Jump if there's a wall in front or a step up
-            if ((tile.HasTile && Main.tileSolid[tile.TileType]) || 
+            if ((tile.HasTile && Main.tileSolid[tile.TileType]) ||
                 (tileAbove.HasTile && Main.tileSolid[tileAbove.TileType]))
             {
                 NPC.velocity.Y = -8f; // Jump
@@ -630,13 +636,49 @@ namespace TerrarAI.Content.NPCs
                         UpdateStatus(result.Message);
                     }
 
+                    // Store the result for the next planning cycle (prompt chaining)
+                    var actionName = _currentAction.Name;
+                    var isCompleteAction = _currentAction is CompleteAction;
+                    _previousActionResult = !string.IsNullOrWhiteSpace(result.Message)
+                        ? $"{actionName}: {result.Message}"
+                        : $"{actionName} completed successfully";
+
                     _currentAction.Reset();
                     _currentAction = null;
 
-                    if (_actionQueue.Count == 0)
+                    // PROMPT CHAINING: Check if this was a CompleteAction
+                    if (isCompleteAction)
                     {
+                        // Task is complete, transition to Completed state
                         State = AgentState.Completed;
-                        UpdateStatus("Plan complete.");
+                        UpdateStatus("Task complete.");
+                        _previousActionResult = null;  // Clear for next command
+                        _plannerTask = null;  // Clear planner task to allow transition to Idle
+                    }
+                    else
+                    {
+                        // Increment replan cycle counter
+                        _replanCycleCount++;
+
+                        // Check if we've exceeded max replan cycles (prevents infinite loops)
+                        if (_replanCycleCount >= MAX_REPLAN_CYCLES)
+                        {
+                            State = AgentState.Completed;
+                            UpdateStatus($"Task incomplete after {MAX_REPLAN_CYCLES} attempts.");
+                            SendChatMessage($"I've tried {MAX_REPLAN_CYCLES} times but can't complete this task. Giving up.", Color.Orange);
+                            _replanCycleCount = 0;
+                            _plannerTask = null;
+                            _previousActionResult = null;
+                        }
+                        else
+                        {
+                            // Clear remaining queue and replan after this action
+                            _actionQueue.Clear();
+                            _replanContext = _previousActionResult;
+                            State = AgentState.Replanning;
+                            UpdateStatus($"Replanning next action... (cycle {_replanCycleCount}/{MAX_REPLAN_CYCLES})");
+                            BeginPlanning();
+                        }
                     }
                     break;
                 case AgentActionStatus.Failure:
@@ -802,7 +844,9 @@ namespace TerrarAI.Content.NPCs
             var agentTileX = (int)tilePos.X;
             var agentTileY = (int)tilePos.Y;
 
-            sb.AppendLine("You are an autonomous AI agent inside Terraria responsible for carrying out short sequences of actions.");
+            sb.AppendLine("You are an autonomous AI agent inside Terraria using the ReAct (Reasoning and Acting) pattern.");
+            sb.AppendLine("You perform ONE action at a time, observe the results, then decide the next action.");
+            sb.AppendLine("This allows you to adapt to changing conditions and unexpected outcomes.");
 
             // Directional context
             sb.AppendLine();
@@ -858,6 +902,7 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
             sb.AppendLine("- mine(tileX, tileY): Mine/chop the tile at absolute grid coordinates. Auto-selects correct tool (axe for trees, pickaxe for stone/ore).");
             sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood).");
+            sb.AppendLine("- complete(message): Signal that the task is finished. Use this when you have accomplished the player's request.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative to your position).");
             sb.AppendLine("- Agent reach: 5 tiles (80 pixels). Actions fail if target is too far.");
 
@@ -883,54 +928,130 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- Check NEARBY RESOURCES section for available resources with coordinates");
             sb.AppendLine("- Check tool requirements - mining ore/stone needs appropriate pickaxe power");
             sb.AppendLine("- Plan movement BEFORE mining/placing if target is not marked REACHABLE");
+            sb.AppendLine("- Return ONLY ONE action per response using the ReAct format");
             sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown");
-            sb.AppendLine("- Plan 1-5 actions at a time. Keep them achievable.");
+            sb.AppendLine("- Use 'complete' action when the task is finished");
 
             sb.AppendLine();
+            sb.AppendLine("REACT FORMAT:");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"observation\": \"What you see in the current state\",");
+            sb.AppendLine("  \"thought\": \"Your reasoning about what to do next\",");
+            sb.AppendLine("  \"action\": {\"type\": \"action_name\", \"params\": {...}}");
+            sb.AppendLine("}");
+            sb.AppendLine();
             sb.AppendLine("CONCRETE EXAMPLES:");
-            sb.AppendLine($"Example 1: Agent at tile({agentTileX},{agentTileY}), Copper ore at tile({agentTileX + 5},{agentTileY})");
-            sb.AppendLine($"  Calculate pixel position: ({agentTileX + 5}) × 16 + 8 = {(agentTileX + 5) * 16 + 8}, {agentTileY} × 16 + 8 = {agentTileY * 16 + 8}");
-            sb.AppendLine($"  Actions: [");
-            sb.AppendLine($"    {{\"type\":\"move\",\"params\":{{\"x\":{(agentTileX + 5) * 16 + 8},\"y\":{agentTileY * 16 + 8}}}}},");
-            sb.AppendLine($"    {{\"type\":\"mine\",\"params\":{{\"tileX\":{agentTileX + 5},\"tileY\":{agentTileY}}}}}");
-            sb.AppendLine($"  ]");
+            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", you see copper at tile({agentTileX + 5},{agentTileY}), you're at tile({agentTileX},{agentTileY})");
+            sb.AppendLine($"  First action - Move closer:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"I'm at tile({agentTileX},{agentTileY}), copper ore visible at tile({agentTileX + 5},{agentTileY}), distance ~80px\",");
+            sb.AppendLine($"  \"thought\": \"Need to move closer to the copper ore before mining it\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"x\":{(agentTileX + 5) * 16 + 8},\"y\":{agentTileY * 16 + 8}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  After moving, second action - Mine it:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Now at tile({agentTileX + 5},{agentTileY}), copper ore is within reach\",");
+            sb.AppendLine($"  \"thought\": \"I'm close enough to mine the copper ore now\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{agentTileX + 5},\"tileY\":{agentTileY}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  After mining, third action - Complete:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Copper ore mined successfully, inventory shows +1 copper ore\",");
+            sb.AppendLine($"  \"thought\": \"Task complete - I've mined the copper ore as requested\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Mined copper ore successfully!\"}}}}");
+            sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine($"Example 2: \"Say hello\" (no coordinates needed)");
-            sb.AppendLine($"  Actions: [{{\"type\":\"say\",\"params\":{{\"text\":\"Hello!\"}}}}]");
+            sb.AppendLine($"Example 2: Task is \"Say hello\"");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Player asked me to say hello\",");
+            sb.AppendLine($"  \"thought\": \"Simple greeting task, no movement needed\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"say\",\"params\":{{\"text\":\"Hello!\"}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  Next action:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Successfully said hello in chat\",");
+            sb.AppendLine($"  \"thought\": \"Greeting delivered, task is done\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Greeting complete!\"}}}}");
+            sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine($"Example 3: \"Build a dirt platform\" at tile({agentTileX + 2},{agentTileY - 1})");
-            sb.AppendLine($"  Actions: [");
-            sb.AppendLine($"    {{\"type\":\"place\",\"params\":{{\"tileX\":{agentTileX + 2},\"tileY\":{agentTileY - 1},\"blockType\":1}}}},");
-            sb.AppendLine($"    {{\"type\":\"place\",\"params\":{{\"tileX\":{agentTileX + 3},\"tileY\":{agentTileY - 1},\"blockType\":1}}}},");
-            sb.AppendLine($"    {{\"type\":\"place\",\"params\":{{\"tileX\":{agentTileX + 4},\"tileY\":{agentTileY - 1},\"blockType\":1}}}}");
-            sb.AppendLine($"  ]");
+            sb.AppendLine($"Example 3: Task is \"Chop trees\" but no trees exist");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Moved in multiple directions, scanned 81x81 tile area multiple times, no trees found anywhere\",");
+            sb.AppendLine($"  \"thought\": \"After extensive searching across many cycles, no trees are available in this area. Task is impossible.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"No trees found in the area after extensive searching. Task cannot be completed.\"}}}}");
+            sb.AppendLine("}");
 
             return sb.ToString();
         }
 
-        private string BuildUserPrompt(string command, string? failureContext)
+        private string BuildUserPrompt(string command, string? context)
         {
             var sb = new StringBuilder();
-            if (!string.IsNullOrWhiteSpace(failureContext))
+
+            // Original task
+            sb.AppendLine("ORIGINAL TASK:");
+            sb.AppendLine(command);
+            sb.AppendLine();
+
+            // Replan cycle tracking
+            if (_replanCycleCount > 0)
             {
-                sb.AppendLine("Previous attempt failed:");
-                sb.AppendLine(failureContext);
-                sb.AppendLine("Generate a new list of actions that avoids this problem.");
+                sb.AppendLine($"REPLAN CYCLE: {_replanCycleCount}/{MAX_REPLAN_CYCLES}");
+                if (_replanCycleCount >= 10)
+                {
+                    sb.AppendLine("⚠️ WARNING: Many replan cycles detected. If the task is impossible or resources are unavailable,");
+                    sb.AppendLine("use the 'complete' action with a message explaining why the task cannot be completed.");
+                }
                 sb.AppendLine();
             }
 
-            sb.AppendLine("Player command:");
-            sb.AppendLine(command);
+            // Previous action result (for prompt chaining)
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                // Check if this is a failure context (contains "failed" or "error")
+                bool isFailure = context.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                              || context.Contains("error", StringComparison.OrdinalIgnoreCase)
+                              || context.Contains("cannot", StringComparison.OrdinalIgnoreCase);
+
+                if (isFailure)
+                {
+                    sb.AppendLine("PREVIOUS ACTION FAILED:");
+                    sb.AppendLine(context);
+                    sb.AppendLine("Analyze what went wrong and choose a different approach.");
+                }
+                else
+                {
+                    sb.AppendLine("PREVIOUS ACTION RESULT:");
+                    sb.AppendLine(context);
+                    sb.AppendLine("The above action completed successfully. Continue with the next step toward completing the original task.");
+                }
+                sb.AppendLine();
+            }
+            else
+            {
+                sb.AppendLine("This is the FIRST action for this task. Analyze the current state and decide the best first step.");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("INSTRUCTIONS:");
+            sb.AppendLine("1. Observe the current state (position, nearby tiles, resources, inventory)");
+            sb.AppendLine("2. Think about what needs to be done next to complete the task");
+            sb.AppendLine("3. Return ONE action using the ReAct JSON format");
+            sb.AppendLine("4. Use 'complete' action when the task is fully accomplished");
             sb.AppendLine();
-            sb.AppendLine("Return JSON only. Example:");
-            sb.AppendLine("{\"actions\": [{\"type\": \"move\", \"params\": {\"x\": 1200, \"y\": 600}}]}");
+            sb.AppendLine("Return JSON only in this format:");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"observation\": \"What you observe about the current situation\",");
+            sb.AppendLine("  \"thought\": \"Your reasoning about the next action\",");
+            sb.AppendLine("  \"action\": {\"type\": \"action_type\", \"params\": {...}}");
+            sb.AppendLine("}");
 
             return sb.ToString();
         }
 
         private string DescribeNearbyTiles()
         {
-            const int scanRadius = 10; // Scan 21x21 grid (10 tiles in each direction)
+            const int scanRadius = 40; // Scan 81x81 grid (40 tiles in each direction - approximately screen size)
             const float maxReach = 80f; // 5 tiles * 16 pixels = standard player reach
 
             var agentTileX = (int)(NPC.Center.X / 16f);
@@ -1054,7 +1175,7 @@ namespace TerrarAI.Content.NPCs
 
         private string DescribeNearbyResources()
         {
-            const int scanRadius = 15; // Scan 31x31 grid for resources
+            const int scanRadius = 50; // Scan 101x101 grid for resources (full screen + beyond)
             const float maxReach = 80f; // 5 tiles = standard player reach
 
             var agentTileX = (int)(NPC.Center.X / 16f);
