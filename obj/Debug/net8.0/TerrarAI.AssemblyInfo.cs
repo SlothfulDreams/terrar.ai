@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("TerrarAI")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+22e6e888cc3b3586bd47a823d2a2555c209b4bf1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+78ceb5e79cd67fedddc19920c3d2be9aa173db4b")]
 [assembly: System.Reflection.AssemblyProductAttribute("TerrarAI")]
 [assembly: System.Reflection.AssemblyTitleAttribute("TerrarAI")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

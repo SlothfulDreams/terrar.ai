@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "us//RbMR550=",
+  "success": true,
+  "projectFilePath": "/home/slothy/.local/share/Terraria/tModLoader/ModSources/terrar.ai/TerrarAI.csproj",
+  "expectedPackageFiles": [
+    "/home/slothy/.nuget/packages/microsoft.netcore.app.ref/8.0.20/microsoft.netcore.app.ref.8.0.20.nupkg.sha512",
+    "/home/slothy/.nuget/packages/microsoft.aspnetcore.app.ref/8.0.20/microsoft.aspnetcore.app.ref.8.0.20.nupkg.sha512"
+  ],
+  "logs": []
+}

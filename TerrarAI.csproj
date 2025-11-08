@@ -5,12 +5,13 @@
 
 	<!-- General -->
 	<PropertyGroup>
-
+	    <TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
 	</PropertyGroup>
 
 	<!-- References -->
 	<ItemGroup>
-
-	</ItemGroup>
+ </ItemGroup>
 
 </Project>

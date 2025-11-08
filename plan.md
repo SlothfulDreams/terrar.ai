@@ -5,8 +5,10 @@ Build AI-powered autonomous agents in Terraria using xAI API.
 Players type natural language commands → AI agents execute tasks in-game.
 
 ## CURRENT STATE
-Basic mod structure exists (TerrarAI.cs, .csproj, build.txt, Localization/)
-Ready for implementation.
+- Phase 1 foundations (config surface, xAI client, `/testxai`, command keybind, server-only helpers) are live in source.
+- Phase 2 action system (AgentAction hierarchy, parser + validator, move/mine/place/say behaviors) is implemented and compiling.
+- Phase 3 agent NPC + commands have their first pass in code: `/spawnagent` spawns the helper, `/agentcmd` lets the host send instructions, and the NPC now plans/executing via xAI asynchronously.
+- Remaining phases (UI, advanced prompting, coordination, etc.) are still outstanding.
 
 ---
 
