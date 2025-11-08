@@ -170,7 +170,7 @@ namespace TerrarAI.Content.Systems
             npc.velocity.X *= MathHelper.Lerp(1.0f, FRICTION, amount);
         }
 
-        public static bool TryJump(NPC npc, float desiredVelocityX, float requiredHeight = 0f, float gapDistance = 0f)
+        public static bool TryJump(NPC npc, float desiredVelocityX, float requiredHeight = 0f, float jumpMultiplier = 1f)
         {
             if (npc == null)
             {
@@ -184,17 +184,15 @@ namespace TerrarAI.Content.Systems
 
             int direction = desiredVelocityX >= 0 ? 1 : -1;
             bool obstacleAhead = HasObstacleAhead(npc, direction);
+            bool wantsElevation = requiredHeight < -24f;
 
-            // Simplified: Only jump if there's an obstacle ahead
-            if (!obstacleAhead)
+            if (!obstacleAhead && !wantsElevation)
             {
                 return false;
             }
 
-            // Simple jump velocity - no complex calculations
-            float jumpVelocity = -6.2f;
-            npc.velocity.Y = jumpVelocity;
-            npc.velocity.X += direction * 0.8f;
+            float jumpVelocity = wantsElevation ? -8f : -6.5f;
+            npc.velocity.Y = jumpVelocity * jumpMultiplier;
             return true;
         }
 
