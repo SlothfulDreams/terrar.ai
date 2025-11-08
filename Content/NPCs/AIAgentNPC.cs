@@ -18,10 +18,11 @@ using Terraria.ModLoader;
 
 namespace TerrarAI.Content.NPCs
 {
-    [AutoloadHead]
     public sealed class AIAgentNPC : ModNPC
     {
-        public override string Texture => "Terraria/Images/NPC_17";
+        private const int SpriteFrameCount = 19;
+        private const int SpriteWidth = 20;
+        private const int SpriteHeight = 30;
 
         private readonly Queue<AgentAction> _actionQueue = new();
         private AgentAction? _currentAction;
@@ -43,8 +44,8 @@ namespace TerrarAI.Content.NPCs
 
         public override void SetDefaults()
         {
-            NPC.width = 18;
-            NPC.height = 40;
+            NPC.width = SpriteWidth;
+            NPC.height = SpriteHeight;
             NPC.friendly = true;
             NPC.dontTakeDamage = true;
             NPC.dontTakeDamageFromHostiles = true;
@@ -67,6 +68,7 @@ namespace TerrarAI.Content.NPCs
             {
                 // Client copies state via net sync; keep visuals simple.
                 NPC.velocity *= IdleFriction;
+                UpdateFacing();
                 return;
             }
 
@@ -93,6 +95,24 @@ namespace TerrarAI.Content.NPCs
                     }
                     break;
             }
+
+            UpdateFacing();
+        }
+
+        public override void FindFrame(int frameHeight)
+        {
+            var texture = TextureAssets.Npc[Type].Value;
+            var frameWidth = texture.Width / SpriteFrameCount;
+            var speedFactor = Math.Abs(NPC.velocity.X) * 0.3 + 0.15;
+
+            NPC.frameCounter += speedFactor;
+            if (NPC.frameCounter >= SpriteFrameCount)
+            {
+                NPC.frameCounter -= SpriteFrameCount;
+            }
+
+            var frame = (int)NPC.frameCounter % SpriteFrameCount;
+            NPC.frame = new Rectangle(frameWidth * frame, 0, frameWidth, texture.Height);
         }
 
         public override void PostDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
@@ -194,6 +214,20 @@ namespace TerrarAI.Content.NPCs
         private void ApplyIdlePhysics()
         {
             NPC.velocity.X *= IdleFriction;
+        }
+
+        private void UpdateFacing()
+        {
+            if (NPC.velocity.X > 0.05f)
+            {
+                NPC.direction = 1;
+            }
+            else if (NPC.velocity.X < -0.05f)
+            {
+                NPC.direction = -1;
+            }
+
+            NPC.spriteDirection = NPC.direction;
         }
 
         private void TickPlanning()

@@ -10,8 +10,13 @@
 		<LangVersion>latest</LangVersion>
 	</PropertyGroup>
 
-	<!-- References -->
-	<ItemGroup>
- </ItemGroup>
+		<!-- References -->
+		<ItemGroup>
+		</ItemGroup>
 
-</Project>
+		<ItemGroup>
+			<Compile Remove="plan.md" />
+			<None Include="plan.md" />
+		</ItemGroup>
+
+	</Project>

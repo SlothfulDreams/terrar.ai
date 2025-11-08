@@ -1,2 +1,29 @@
-# This file will automatically update with entries for new content after a build and reload.
+"Keybinds.Open Command Panel.DisplayName": Open  Command  Panel
+NPCs.AIAgentNPC.DisplayName: A I Agent N P C
 
+Configs: {
+	TerrarAI_Config: {
+		DisplayName: Terrar A I_ Config
+		Headers.xAI: x A I Header
+
+		ApiKey: {
+			Label: Api Key
+			Tooltip: ""
+		}
+
+		Model: {
+			Label: Model
+			Tooltip: ""
+		}
+
+		Temperature: {
+			Label: Temperature
+			Tooltip: ""
+		}
+
+		BaseEndpoint: {
+			Label: Base Endpoint
+			Tooltip: ""
+		}
+	}
+}

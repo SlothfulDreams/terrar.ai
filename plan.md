@@ -8,8 +8,9 @@ Players type natural language commands → AI agents execute tasks in-game
 ## CURRENT STATE
 - Phase 1 foundations (config surface, xAI client, `/testxai`, command keybind, server-only helpers) are live in source.
 - Phase 2 action system (AgentAction hierarchy, parser + validator, move/mine/place/say behaviors) is implemented and compiling.
-- Phase 3 agent NPC + commands have their first pass in code: `/spawnagent` spawns the helper, `/agentcmd` lets the host send instructions, and the NPC now plans/executing via xAI asynchronously.
-- Remaining phases (UI, advanced prompting, coordination, etc.) are still outstanding.
+- Phase 3 agent NPC + commands have their first pass in code: `/spawnagent` spawns the helper, `/agentcmd` lets the host send instructions, and the NPC now plans/executing via xAI asynchronously with the custom sprite sheet installed.
+- Phase 4 command UI is playable: pressing `J` opens `CommandPanelUI`, `CommandUISystem` draws it, and `CommandUIPlayer` handles nearest-agent dispatch with validation messaging. UI interactions now emit structured log lines to `tModLoader/Logs` for easier troubleshooting.
+- Remaining phases (advanced prompting, coordination, polish, etc.) are still outstanding.
 
 ---
 
@@ -133,7 +134,7 @@ Create the main agent NPC entity with state machine and xAI integration.
 Content/
   NPCs/
     AIAgentNPC.cs
-    AIAgentNPC.png (18x40 sprite)
+    AIAgentNPC.png (custom 20x30 sprite sheet, 19 horizontal frames)
 Common/
   Commands/
     SpawnAgentCommand.cs
@@ -491,7 +492,7 @@ TerrarAI/
 │   ├── NPCs/
 │   │   ├── AgentState.cs          # State enum
 │   │   ├── AIAgentNPC.cs          # Main agent class
-│   │   └── AIAgentNPC.png         # 18x40 sprite
+│   │   └── AIAgentNPC.png         # 20x30 sprite sheet (19 frames, horizontal)
 │   ├── Actions/
 │   │   ├── AgentAction.cs         # Abstract base
 │   │   ├── MoveAction.cs          # Navigation
