@@ -120,7 +120,7 @@ namespace TerrarAI.Content.Systems
             return AgentActionResult.Pending($"Moving to {targetPixels}");
         }
 
-        public static bool TryJump(NPC npc, float desiredVelocityX, float requiredHeight = 0f)
+        public static bool TryJump(NPC npc, float desiredVelocityX, float requiredHeight = 0f, float jumpMultiplier = 1f)
         {
             if (npc == null)
             {
@@ -142,7 +142,7 @@ namespace TerrarAI.Content.Systems
             }
 
             float jumpVelocity = wantsElevation ? -8f : -6.5f;
-            npc.velocity.Y = jumpVelocity;
+            npc.velocity.Y = jumpVelocity * jumpMultiplier;
             return true;
         }
 

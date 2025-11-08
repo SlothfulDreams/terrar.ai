@@ -87,6 +87,14 @@ namespace TerrarAI.Content.NPCs
         // Player appearance clone (stored for rendering as player)
         private Player? _appearanceClone;
 
+        // Per-agent randomized movement traits
+        private float _baseSpeedMultiplier = 1f;
+        private float _baseJumpMultiplier = 1f;
+        private float _currentSpeedMultiplier = 1f;
+        private float _currentJumpMultiplier = 1f;
+        private int _randomizationTimer = 0;
+        private const int RANDOMIZATION_INTERVAL = 180; // 3 seconds at 60 FPS
+
         public override void SetStaticDefaults()
         {
             Main.npcFrameCount[Type] = 1;
@@ -114,6 +122,13 @@ namespace TerrarAI.Content.NPCs
         {
             State = AgentState.Idle;
             _statusMessage = "Awaiting command";
+
+            // Set base movement traits for each agent
+            var random = new Random(NPC.whoAmI + (int)Main.GameUpdateCount);
+            _baseSpeedMultiplier = 0.7f + (float)(random.NextDouble() * 0.6);
+            _baseJumpMultiplier = 0.8f + (float)(random.NextDouble() * 0.4);
+            _currentSpeedMultiplier = _baseSpeedMultiplier;
+            _currentJumpMultiplier = _baseJumpMultiplier;
 
             // Clone player appearance if spawned by a player
             if (source is EntitySource_Parent parent && parent.Entity is Player player)
@@ -401,6 +416,16 @@ namespace TerrarAI.Content.NPCs
 
         private void PerformFollowPlayerAI()
         {
+            // Randomize movement traits every 3 seconds
+            _randomizationTimer++;
+            if (_randomizationTimer >= RANDOMIZATION_INTERVAL)
+            {
+                _randomizationTimer = 0;
+                var random = new Random(NPC.whoAmI + (int)Main.GameUpdateCount);
+                _currentSpeedMultiplier = _baseSpeedMultiplier * (0.5f + (float)(random.NextDouble() * 0.7f));
+                _currentJumpMultiplier = _baseJumpMultiplier * (0.5f + (float)(random.NextDouble() * 1.5f));
+            }
+
             Player? target = null;
             if (_commander?.active == true && !_commander.dead)
             {
@@ -473,18 +498,18 @@ namespace TerrarAI.Content.NPCs
             }
             else if (distance < FOLLOW_DISTANCE)
             {
-                SmoothMoveToward(target.Center, FOLLOW_SPEED, ACCELERATION);
+                SmoothMoveToward(target.Center, FOLLOW_SPEED * _currentSpeedMultiplier, ACCELERATION);
                 ApplyGravityAndCollision();
             }
             else if (distance < CATCHUP_DISTANCE)
             {
-                float catchupSpeed = Math.Min(CATCHUP_SPEED, target.velocity.Length() + 2f);
+                float catchupSpeed = Math.Min(CATCHUP_SPEED * _currentSpeedMultiplier, target.velocity.Length() + 2f);
                 SmoothMoveToward(target.Center, catchupSpeed, ACCELERATION * 1.5f);
                 ApplyGravityAndCollision();
             }
             else
             {
-                SmoothMoveToward(target.Center, CATCHUP_SPEED, ACCELERATION * 2f);
+                SmoothMoveToward(target.Center, CATCHUP_SPEED * _currentSpeedMultiplier, ACCELERATION * 2f);
                 ApplyGravityAndCollision();
             }
         }
@@ -542,7 +567,7 @@ namespace TerrarAI.Content.NPCs
 
             if (distanceY < -CLIMB_HEIGHT_THRESHOLD && onGround)
             {
-                MovementHelper.TryJump(NPC, NPC.velocity.X, distanceY);
+                MovementHelper.TryJump(NPC, NPC.velocity.X, distanceY, _currentJumpMultiplier);
             }
 
             if (distanceY > FALL_HEIGHT_THRESHOLD && onGround && ShouldFallThroughPlatform())

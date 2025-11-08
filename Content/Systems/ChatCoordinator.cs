@@ -16,10 +16,12 @@ namespace TerrarAI.Content.Systems
     {
         private const string RouterSystemPrompt = "You route Terraria chat requests. Respond with JSON: {\"type\":\"create\",\"count\":N} to spawn that many agents (1-8), {\"type\":\"remove\",\"all\":true|false} to despawn, or {\"type\":\"command\",\"command\":\"text\"} when the player wants an agent to act. Default count is 1. Only choose remove when the player clearly wants to despawn agents.";
         private static int _nameSeed = 1;
+        private static float _nextSpawnOffsetX;
 
         public override void OnWorldLoad()
         {
             _nameSeed = 1;
+            _nextSpawnOffsetX = 0f;
         }
 
         internal static void HandleInput(CommandCaller caller, string text)
@@ -72,7 +74,8 @@ namespace TerrarAI.Content.Systems
 
             for (int i = 0; i < count; i++)
             {
-                var spawnOffset = new Vector2(48f * player.direction + (i * 16f), -16f);
+                var spawnOffsetX = 48f * player.direction + (i * 16f) + (_nextSpawnOffsetX * player.direction);
+                var spawnOffset = new Vector2(spawnOffsetX, -16f);
                 var spawnPos = player.Center + spawnOffset;
                 var index = NPC.NewNPC(new EntitySource_DebugCommand("TerrarAI:ChatCoordinator"), (int)spawnPos.X, (int)spawnPos.Y, ModContent.NPCType<AIAgentNPC>());
                 if (index < 0 || index >= Main.maxNPCs)
@@ -89,6 +92,8 @@ namespace TerrarAI.Content.Systems
                 }
                 npc.netUpdate = true;
                 created.Add(npc.GivenName ?? "Agent");
+
+                _nextSpawnOffsetX += 30f;
             }
 
             if (created.Count == 0)
