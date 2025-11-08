@@ -1,0 +1,3 @@
+displayName = terrar.ai
+author = Adam T., Benson Z.
+version = 0.1
