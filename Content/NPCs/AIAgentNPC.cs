@@ -33,6 +33,8 @@ namespace TerrarAI.Content.NPCs
         private Player? _commander;
 
         private const float IdleFriction = 0.85f;
+        private const float MaxLeashDistance = 600f;
+        private const float FollowMinDistance = 72f;
 
         // Planning timeout tracking
         private long _planningStartTick;
@@ -59,10 +61,13 @@ namespace TerrarAI.Content.NPCs
             NPC.dontTakeDamage = true;
             NPC.dontTakeDamageFromHostiles = true;
             NPC.lifeMax = 250;
-            NPC.aiStyle = -1;
+            NPC.aiStyle = NPCAIStyleID.Fighter;
+            AIType = NPCID.GoblinWarrior;
+            AnimationType = NPCID.GoblinWarrior;
             NPC.noGravity = false;
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
+            NPC.damage = 0;
         }
 
         public override void OnSpawn(IEntitySource source)
@@ -114,6 +119,21 @@ namespace TerrarAI.Content.NPCs
             ClonePlayerAppearance(player);
         }
 
+        public override bool PreAI()
+        {
+            if (State == AgentState.Idle)
+            {
+                NPC.aiStyle = NPCAIStyleID.Fighter;
+                AssignFollowTarget();
+            }
+            else
+            {
+                NPC.aiStyle = -1;
+            }
+
+            return true;
+        }
+
         public override void AI()
         {
             if (!ServerAuthority.IsServer)
@@ -133,7 +153,7 @@ namespace TerrarAI.Content.NPCs
             switch (State)
             {
                 case AgentState.Idle:
-                    ApplyIdlePhysics();
+                    FollowCommander();
                     break;
                 case AgentState.Planning:
                     TickPlanning();
@@ -154,6 +174,7 @@ namespace TerrarAI.Content.NPCs
                     break;
             }
 
+            EnforceLeash();
             UpdateFacing();
         }
 
@@ -296,6 +317,93 @@ namespace TerrarAI.Content.NPCs
         private void ApplyIdlePhysics()
         {
             NPC.velocity.X *= IdleFriction;
+        }
+
+        private void AssignFollowTarget()
+        {
+            if (!ServerAuthority.IsServer)
+            {
+                return;
+            }
+
+            var target = FindFollowTarget();
+            if (target != null)
+            {
+                NPC.target = target.whoAmI;
+            }
+        }
+
+        private Player? FindFollowTarget()
+        {
+            if (_commander?.active == true && !_commander.dead)
+            {
+                return _commander;
+            }
+
+            NPC.TargetClosest(false);
+            var candidate = Main.player[NPC.target];
+            if (candidate.active && !candidate.dead)
+            {
+                return candidate;
+            }
+
+            return null;
+        }
+
+        private void FollowCommander()
+        {
+            if (!ServerAuthority.IsServer)
+            {
+                return;
+            }
+
+            var target = FindFollowTarget();
+            if (target == null)
+            {
+                return;
+            }
+
+            var offset = target.Center - NPC.Center;
+            var distance = offset.Length();
+            if (distance <= FollowMinDistance)
+            {
+                NPC.velocity *= IdleFriction;
+                return;
+            }
+
+            var direction = offset / distance;
+            var followFactor = 1.0f;
+            var desiredSpeed = target.velocity.Length() * followFactor;
+            if (desiredSpeed < 4f)
+            {
+                desiredSpeed = 4f;
+            }
+
+            NPC.velocity = direction * desiredSpeed;
+        }
+
+        private void EnforceLeash()
+        {
+            if (!ServerAuthority.IsServer)
+            {
+                return;
+            }
+
+            var target = FindFollowTarget();
+            if (target == null)
+            {
+                return;
+            }
+
+            var maxDistanceSquared = MaxLeashDistance * MaxLeashDistance;
+            if (Vector2.DistanceSquared(NPC.Center, target.Center) <= maxDistanceSquared)
+            {
+                return;
+            }
+
+            NPC.position = target.Center - NPC.Size * 0.5f;
+            NPC.velocity = Vector2.Zero;
+            NPC.netUpdate = true;
         }
 
         private void UpdateFacing()
