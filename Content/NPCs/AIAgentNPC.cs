@@ -34,7 +34,6 @@ namespace TerrarAI.Content.NPCs
 
         private const float IdleFriction = 0.85f;
         private const float MaxLeashDistance = 600f;
-        private const float FollowMinDistance = 72f;
 
         // Planning timeout tracking
         private long _planningStartTick;
@@ -62,8 +61,8 @@ namespace TerrarAI.Content.NPCs
             NPC.dontTakeDamageFromHostiles = true;
             NPC.lifeMax = 250;
             NPC.aiStyle = NPCAIStyleID.Fighter;
-            AIType = NPCID.GoblinWarrior;
-            AnimationType = NPCID.GoblinWarrior;
+            AIType = NPCID.UndeadViking;
+            AnimationType = NPCID.UndeadViking;
             NPC.noGravity = false;
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
@@ -153,7 +152,6 @@ namespace TerrarAI.Content.NPCs
             switch (State)
             {
                 case AgentState.Idle:
-                    FollowCommander();
                     break;
                 case AgentState.Planning:
                     TickPlanning();
@@ -350,37 +348,6 @@ namespace TerrarAI.Content.NPCs
             return null;
         }
 
-        private void FollowCommander()
-        {
-            if (!ServerAuthority.IsServer)
-            {
-                return;
-            }
-
-            var target = FindFollowTarget();
-            if (target == null)
-            {
-                return;
-            }
-
-            var offset = target.Center - NPC.Center;
-            var distance = offset.Length();
-            if (distance <= FollowMinDistance)
-            {
-                NPC.velocity *= IdleFriction;
-                return;
-            }
-
-            var direction = offset / distance;
-            var followFactor = 1.0f;
-            var desiredSpeed = target.velocity.Length() * followFactor;
-            if (desiredSpeed < 4f)
-            {
-                desiredSpeed = 4f;
-            }
-
-            NPC.velocity = direction * desiredSpeed;
-        }
 
         private void EnforceLeash()
         {
