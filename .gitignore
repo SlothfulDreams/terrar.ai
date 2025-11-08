@@ -1,1 +1,7 @@
 *.local.*
+.env
+bin/
+obj/
+*.tmod
+*.user
+*.suo
