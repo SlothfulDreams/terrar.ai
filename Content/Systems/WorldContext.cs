@@ -32,7 +32,19 @@ namespace TerrarAI.Content.Systems
             var sb = new StringBuilder();
             sb.AppendLine("=== YOUR SITUATION ===");
             sb.AppendLine($"Position: {GetPositionString()}");
-            sb.AppendLine($"Nearby Resources: {GetResourceSummary()}");
+            
+            var trees = GetTreeSummary();
+            if (!string.IsNullOrEmpty(trees))
+            {
+                sb.AppendLine($"Trees:\n{trees}");
+            }
+            
+            var ores = GetResourceSummary();
+            if (!string.IsNullOrEmpty(ores))
+            {
+                sb.AppendLine($"Ores:\n{ores}");
+            }
+            
             sb.AppendLine($"Nearby Blocks: {GetBlockSummary()}");
             sb.AppendLine($"Nearby Items: {GetItemsSummary()}");
             sb.AppendLine($"Commander Target: {GetCommanderSummary()}");
@@ -47,66 +59,57 @@ namespace TerrarAI.Content.Systems
             return $"tile({tileX},{tileY})";
         }
 
+        private string GetTreeSummary()
+        {
+            int agentTileX = (int)(_agent.Center.X / 16f);
+            int agentTileY = (int)(_agent.Center.Y / 16f);
+            var centerTile = new Point(agentTileX, agentTileY);
+            var treeBases = TreeHelper.FindTreeBasesNear(centerTile, RESOURCE_SCAN_RADIUS);
+            
+            if (treeBases.Count == 0)
+            {
+                return string.Empty;
+            }
+            
+            // If actively chopping, show current target
+            if (_lockedMineTarget.HasValue && _lockReason == "tree")
+            {
+                return $"Active: chop tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})";
+            }
+            
+            // Show nearest 5 tree bases (tile coords only, no distance)
+            var nearest = treeBases.OrderBy(t => TileDistance(t)).Take(5);
+            var lines = nearest.Select(t => $"Tree: tile({t.X},{t.Y})");
+            return string.Join("\n", lines);
+        }
+        
+        private int TileDistance(Point tile)
+        {
+            int agentTileX = (int)(_agent.Center.X / 16f);
+            int agentTileY = (int)(_agent.Center.Y / 16f);
+            return Math.Abs(tile.X - agentTileX) + Math.Abs(tile.Y - agentTileY);
+        }
+        
         private string GetResourceSummary()
         {
             var resources = ScanResources();
+            // Exclude trees - they're shown separately
+            resources = resources.Where(r => r.Type != "trees").ToList();
+            
             if (resources.Count == 0)
             {
                 return "none";
             }
 
-            // If there's a locked target, show it prominently
-            if (_lockedMineTarget.HasValue)
+            // If there's a locked target (ore), show it prominently
+            if (_lockedMineTarget.HasValue && _lockReason != "tree")
             {
-                // Special handling for trees - show next trunk tile to mine
-                if (_lockReason == "tree" && TreeHelper.IsTreeTile(_lockedMineTarget.Value))
-                {
-                    var nextTile = TreeHelper.GetNextTreeTileToMine(_lockedMineTarget.Value);
-                    if (nextTile.HasValue)
-                    {
-                        float tileCenterX = nextTile.Value.X * 16f + 8f;
-                        float tileCenterY = nextTile.Value.Y * 16f + 8f;
-                        float distance = Vector2.Distance(_agent.Center, new Vector2(tileCenterX, tileCenterY));
-                        bool reachable = distance <= MAX_REACH;
-                        string reachTag = reachable ? "reachable" : $"{distance:F0}px";
-
-                        string treeStatus = TreeHelper.GetTreeStatus(_lockedMineTarget.Value);
-                        string lockedInfo = $"⚠️ CURRENT TARGET (tree) next trunk tile({nextTile.Value.X},{nextTile.Value.Y}) [{reachTag}] - {treeStatus} - FINISH THIS TREE FIRST";
-
-                        // Filter out other trees to prevent distraction
-                        var otherResources = resources.Where(r => r.Type != "trees").ToList();
-
-                        if (otherResources.Count == 0)
-                        {
-                            return lockedInfo;
-                        }
-
-                        // Show locked tree first, then other resource types
-                        var grouped = otherResources.GroupBy(r => r.Type)
-                                                   .OrderBy(g => g.Min(r => r.Distance))
-                                                   .Take(5);
-
-                        var summaries = new List<string> { lockedInfo };
-                        foreach (var group in grouped)
-                        {
-                            int count = group.Count();
-                            var nearest = group.OrderBy(r => r.Distance).First();
-                            string reachTagOther = nearest.Reachable ? "reachable" : $"{nearest.Distance:F0}px";
-                            summaries.Add($"{count} {group.Key} → tile({nearest.TileX},{nearest.TileY}) [{reachTagOther}]");
-                        }
-
-                        return string.Join("; ", summaries);
-                    }
-                }
-
-                // Non-tree locked resource (ore, etc.)
                 var lockedResource = resources.FirstOrDefault(r => r.TileX == _lockedMineTarget.Value.X && r.TileY == _lockedMineTarget.Value.Y);
                 if (lockedResource != null)
                 {
-                    string reachTag = lockedResource.Reachable ? "reachable" : $"{lockedResource.Distance:F0}px";
-                    string lockedInfo = $"⚠️ CURRENT TARGET ({_lockReason ?? lockedResource.Type}) tile({lockedResource.TileX},{lockedResource.TileY}) [{reachTag}] - FINISH THIS FIRST";
+                    string lockedInfo = $"Active: mine tile({lockedResource.TileX},{lockedResource.TileY})";
 
-                    // Filter out other resources of the same type to prevent distraction
+                    // Filter out other resources of the same type
                     var otherResources = resources.Where(r => r.Type != lockedResource.Type || (r.TileX == lockedResource.TileX && r.TileY == lockedResource.TileY)).ToList();
 
                     if (otherResources.Count == 0 || otherResources.All(r => r.TileX == lockedResource.TileX && r.TileY == lockedResource.TileY))
@@ -117,49 +120,36 @@ namespace TerrarAI.Content.Systems
                     // Show locked target first, then other resource types
                     var grouped = otherResources.Where(r => r.Type != lockedResource.Type)
                                                .GroupBy(r => r.Type)
-                                               .OrderBy(g => g.Min(r => r.Distance))
+                                               .OrderBy(g => g.Min(r => TileDistance(new Point(r.TileX, r.TileY))))
                                                .Take(5);
 
                     var summaries = new List<string> { lockedInfo };
                     foreach (var group in grouped)
                     {
-                        int count = group.Count();
-                        var nearest = group.OrderBy(r => r.Distance).First();
-                        string reachTagOther = nearest.Reachable ? "reachable" : $"{nearest.Distance:F0}px";
-                        summaries.Add($"{count} {group.Key} → tile({nearest.TileX},{nearest.TileY}) [{reachTagOther}]");
+                        var nearest = group.OrderBy(r => TileDistance(new Point(r.TileX, r.TileY))).First();
+                        summaries.Add($"{group.Key}: tile({nearest.TileX},{nearest.TileY})");
                     }
 
-                    return string.Join("; ", summaries);
+                    return string.Join("\n", summaries);
                 }
             }
 
-            // No lock - show resources normally
+            // No lock - show resources normally (tile coords only, no distances)
             var groupedNormal = resources.GroupBy(r => r.Type)
-                                  .OrderBy(g => g.Min(r => r.Distance))
+                                  .OrderBy(g => g.Min(r => TileDistance(new Point(r.TileX, r.TileY))))
                                   .Take(8);
 
             var summariesNormal = new List<string>();
             foreach (var group in groupedNormal)
             {
-                int count = group.Count();
-                int reachable = group.Count(r => r.Reachable);
-                string suffix = reachable > 0 ? $" ({reachable} reachable)" : "";
-
-                var nearest = group.OrderBy(r => r.Distance)
-                                   .Take(3)
-                                   .Select(r =>
-                                   {
-                                       string reachTag = r.Reachable ? "reachable" : $"{r.Distance:F0}px";
-                                       return $"tile({r.TileX},{r.TileY}) [{reachTag}]";
-                                   });
+                var nearest = group.OrderBy(r => TileDistance(new Point(r.TileX, r.TileY))).Take(3)
+                                   .Select(r => $"tile({r.TileX},{r.TileY})");
 
                 string nearestInfo = string.Join(", ", nearest);
-                summariesNormal.Add(nearestInfo.Length > 0
-                    ? $"{count} {group.Key}{suffix} → {nearestInfo}"
-                    : $"{count} {group.Key}{suffix}");
+                summariesNormal.Add($"{group.Key}: {nearestInfo}");
             }
 
-            return string.Join(", ", summariesNormal);
+            return string.Join("\n", summariesNormal);
         }
 
         private string GetBlockSummary()
@@ -386,10 +376,9 @@ namespace TerrarAI.Content.Systems
         {
             int tileX = (int)(target.X / 16f);
             int tileY = (int)(target.Y / 16f);
-            float distance = Vector2.Distance(_agent.Center, target);
             var delta = target - _agent.Center;
             string direction = DescribeDirection(delta);
-            return $"tile({tileX},{tileY}) pixels({target.X:F0},{target.Y:F0}) [{distance:F0}px, {direction}]";
+            return $"tile({tileX},{tileY}) [{direction}]";
         }
 
         private string DescribeDirection(Vector2 delta)

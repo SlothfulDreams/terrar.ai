@@ -9,22 +9,27 @@ namespace TerrarAI.Content.Actions
 {
     public sealed class MoveAction : AgentAction
     {
-        private readonly Vector2 _targetPixels;
+        private readonly Point _targetTile;
         private readonly float _tolerance;
         private readonly float _speed;
         private MovementHelper.MovementState _movementState;
 
-        public MoveAction(Vector2 targetPixels, float tolerance = 12f, float speed = 3f)
+        public MoveAction(Point targetTile, float tolerance = 1f, float speed = 3f)
         {
-            _targetPixels = targetPixels;
+            _targetTile = targetTile;
             _tolerance = tolerance;
             _speed = speed;
-            _movementState = MovementHelper.MovementState.Create(tolerance);
+            _movementState = MovementHelper.MovementState.Create(tolerance * 16f);
         }
 
         public override string Name => "move";
 
-        public Vector2 TargetPosition => _targetPixels;
+        public Point TargetTile => _targetTile;
+
+        private Vector2 GetTargetPixelCenter()
+        {
+            return new Vector2(_targetTile.X * 16f + 8f, _targetTile.Y * 16f + 8f);
+        }
 
         protected override AgentActionResult OnTick(AgentActionContext context)
         {
@@ -34,39 +39,40 @@ namespace TerrarAI.Content.Actions
             }
 
             var npc = context.Agent;
+            var targetPixels = GetTargetPixelCenter();
 
             if (TerrarAI_Config.Get().EnableCreativeMode)
             {
-                npc.Center = _targetPixels;
+                npc.Center = targetPixels;
                 npc.velocity = Vector2.Zero;
-                return AgentActionResult.Success($"Snapped to {_targetPixels} (creative mode).");
+                return AgentActionResult.Success($"Snapped to tile({_targetTile.X},{_targetTile.Y}) (creative mode).");
             }
 
-            var settings = MovementHelper.MovementSettings.Create(_speed, _tolerance);
-            return MovementHelper.MoveTowards(npc, _targetPixels, ref _movementState, settings);
+            var settings = MovementHelper.MovementSettings.Create(_speed, _tolerance * 16f);
+            return MovementHelper.MoveTowards(npc, targetPixels, ref _movementState, settings);
         }
 
         public override void Reset()
         {
             base.Reset();
-            _movementState.Reset(_tolerance);
+            _movementState.Reset(_tolerance * 16f);
         }
 
         public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
         {
-            var x = ActionParameterReader.ReadNumber(parameters, "x");
-            var y = ActionParameterReader.ReadNumber(parameters, "y");
-            var clamped = validator.ClampPixelPosition(x, y);
+            var tileX = ActionParameterReader.ReadInt(parameters, "tileX");
+            var tileY = ActionParameterReader.ReadInt(parameters, "tileY");
+            var clamped = validator.ClampTilePosition(tileX, tileY);
 
             float tolerance = parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("tolerance", out var tol) && tol.ValueKind == JsonValueKind.Number
                 ? (float)tol.GetDouble()
-                : 12f;
+                : 1f;
 
             float speed = parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("speed", out var spd) && spd.ValueKind == JsonValueKind.Number
                 ? Math.Clamp((float)spd.GetDouble(), 1f, 6f)
                 : 3f;
 
-            tolerance = Math.Clamp(tolerance, 4f, 64f);
+            tolerance = Math.Clamp(tolerance, 0.25f, 4f);
 
             return new MoveAction(clamped, tolerance, speed);
         }

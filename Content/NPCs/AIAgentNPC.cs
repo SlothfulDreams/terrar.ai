@@ -585,6 +585,11 @@ namespace TerrarAI.Content.NPCs
             }
         }
 
+        public float GetJumpMultiplier()
+        {
+            return _currentJumpMultiplier;
+        }
+
         private bool ShouldFallThroughPlatform()
         {
             return MovementHelper.IsStandingOnPlatform(NPC);
@@ -719,10 +724,10 @@ namespace TerrarAI.Content.NPCs
                 _currentAction.Reset();
                 UpdateStatus($"Executing {_currentAction.Name}...");
 
-                // TARGET LOCKING: Lock onto first MineAction target to prevent switching
-                if (_currentAction is MineAction mineAction && !_lockedMineTarget.HasValue)
+                // TARGET LOCKING: Lock onto first ChopAction or MineAction target to prevent switching
+                if ((_currentAction is ChopAction chopAction || _currentAction is MineAction mineAction) && !_lockedMineTarget.HasValue)
                 {
-                    var targetTile = mineAction.GetTargetTile();
+                    var targetTile = _currentAction.GetTargetTile();
                     if (targetTile.HasValue)
                     {
                         var tile = Framing.GetTileSafely(targetTile.Value.X, targetTile.Value.Y);
@@ -803,7 +808,8 @@ namespace TerrarAI.Content.NPCs
                     if (targetPos.HasValue)
                     {
                         // Create temporary move action to approach target
-                        var moveAction = new MoveAction(targetPos.Value);
+                        var targetTile = new Point((int)(targetPos.Value.X / 16f), (int)(targetPos.Value.Y / 16f));
+                        var moveAction = new MoveAction(targetTile);
                         var moveContext = AgentActionContext.From(NPC, _commander);
                         moveAction.Tick(moveContext);  // Execute movement this tick
                     }
@@ -1133,18 +1139,19 @@ namespace TerrarAI.Content.NPCs
 
             sb.AppendLine();
             sb.AppendLine("AVAILABLE ACTIONS:");
-            sb.AppendLine("- move(x, y): Move toward absolute pixel coordinates. Actions automatically move you to targets first.");
+            sb.AppendLine("- move(tileX, tileY): Move to a tile. Jumps over obstacles and gaps automatically.");
+            sb.AppendLine("- chop(tileX, tileY): Chop a tree trunk. Auto-moves to target.");
+            sb.AppendLine("- mine(tileX, tileY): Mine ore/stone. Auto-moves to target.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
-            sb.AppendLine("- mine(tileX, tileY): Mine/chop a tile. Always use explicit tile coordinates from YOUR SITUATION. Auto-moves and selects the correct tool.");
             sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood). Auto-moves first.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
-            sb.AppendLine("- Mine and place actions automatically move you into range first - no need for separate move actions!");
+            sb.AppendLine("- chop/mine actions automatically move you close enough.");
             sb.AppendLine("- Items are AUTO-COLLECTED after every action! Mining/chopping drops items which are automatically added to inventory.");
 
             sb.AppendLine();
             sb.AppendLine("CURRENT STATE:");
-            sb.AppendLine($"- Position: tile({agentTileX},{agentTileY}) = pixels({pixelPos.X:F0},{pixelPos.Y:F0})");
+            sb.AppendLine($"- Position: tile({agentTileX},{agentTileY})");
             sb.AppendLine($"- Facing: {(NPC.direction > 0 ? "RIGHT (→)" : "LEFT (←)")}");
             sb.AppendLine($"- Health: {NPC.life}/{NPC.lifeMax}");
 
@@ -1168,11 +1175,12 @@ namespace TerrarAI.Content.NPCs
 
             sb.AppendLine();
             sb.AppendLine("IMPORTANT RULES:");
-            sb.AppendLine("- Always provide explicit tile/pixel coordinates from YOUR SITUATION (tileX/tileY or x/y).");
+            sb.AppendLine("- Use tile coordinates from YOUR SITUATION (tileX, tileY).");
             sb.AppendLine("- Do NOT use the \"target\" field (e.g., nearest_trees). It is unsupported and will fail.");
             sb.AppendLine("- Check YOUR SITUATION for available resources and player positions before acting.");
-            sb.AppendLine("- Mine/place actions auto-move you to targets - NO need for separate move actions once coordinates are chosen.");
-            sb.AppendLine("- Before leaving an area, collect dropped items so nothing valuable is left on the ground.");
+            sb.AppendLine("- mine/chop actions automatically move you close enough.");
+            sb.AppendLine("- move() jumps over gaps and obstacles automatically.");
+            sb.AppendLine("- If movement fails, you'll see the failure reason and can replan.");
             sb.AppendLine("- Return ONLY ONE action per response using the ReAct format.");
             sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown.");
             sb.AppendLine("- Use 'complete' action when the task is finished.");
@@ -1210,46 +1218,51 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine();
             sb.AppendLine("CONCRETE EXAMPLES:");
 
-            // Calculate example pixel coordinates for the examples
             int exampleTargetTileX = agentTileX + 5;
             int exampleTargetTileY = agentTileY;
-            int exampleTargetPixelX = exampleTargetTileX * 16 + 8;
-            int exampleTargetPixelY = exampleTargetTileY * 16 + 8;
 
-            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", NEARBY RESOURCES shows: \"Copper at tile({exampleTargetTileX},{exampleTargetTileY}) pixels({exampleTargetPixelX},{exampleTargetPixelY}) 5→ [80px]\"");
-            sb.AppendLine($"  First action - Move closer:");
+            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", Ores shows: \"Copper: tile({exampleTargetTileX},{exampleTargetTileY})\"");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"I'm at tile({agentTileX},{agentTileY}), copper ore at tile({exampleTargetTileX},{exampleTargetTileY}) pixels({exampleTargetPixelX},{exampleTargetPixelY}), distance 80px\",");
-            sb.AppendLine($"  \"thought\": \"Copper is 80px away, need to move closer using the pixel coordinates from the resource list\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"x\":{exampleTargetPixelX},\"y\":{exampleTargetPixelY}}}}}");
-            sb.AppendLine("}");
-            sb.AppendLine($"  After moving, second action - Mine it:");
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Now at tile({exampleTargetTileX},{exampleTargetTileY}), copper ore shows as [REACHABLE]\",");
-            sb.AppendLine($"  \"thought\": \"I'm close enough to mine the copper ore now - use tile coordinates for mine action\",");
+            sb.AppendLine($"  \"observation\": \"Copper at tile({exampleTargetTileX},{exampleTargetTileY})\",");
+            sb.AppendLine($"  \"thought\": \"Mine the copper\",");
             sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY}}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  After mining, third action - Complete:");
+            sb.AppendLine($"  (mine action auto-moves, no separate move needed)");
+            sb.AppendLine($"  After mining:");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Copper ore mined successfully, inventory shows +1 copper ore\",");
-            sb.AppendLine($"  \"thought\": \"Task complete - I've mined the copper ore as requested\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Mined copper ore successfully!\"}}}}");
+            sb.AppendLine($"  \"observation\": \"Copper ore mined successfully\",");
+            sb.AppendLine($"  \"thought\": \"Task complete\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Mined copper ore\"}}}}");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine($"Example 2: Task is \"Say hello\"");
+            sb.AppendLine($"Example 2: Task is \"Go to tile(100,50)\"");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Player asked me to say hello\",");
-            sb.AppendLine($"  \"thought\": \"Simple greeting task, no movement needed\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"say\",\"params\":{{\"text\":\"Hello!\"}}}}");
+            sb.AppendLine($"  \"observation\": \"Need to move to tile(100,50)\",");
+            sb.AppendLine($"  \"thought\": \"Move to target tile\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"tileX\":100,\"tileY\":50}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  Next action:");
+            sb.AppendLine($"  If movement fails:");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Successfully said hello in chat\",");
-            sb.AppendLine($"  \"thought\": \"Greeting delivered, task is done\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Greeting complete!\"}}}}");
+            sb.AppendLine($"  \"observation\": \"Previous action failed: Movement stalled near tile(80,50). Obstacle blocking path.\",");
+            sb.AppendLine($"  \"thought\": \"Try alternate path via tile(80,55)\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"tileX\":80,\"tileY\":55}}}}");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine($"Example 3: Task is \"Chop trees\" but no trees exist");
+            sb.AppendLine($"Example 3: Task is \"Chop trees\", Trees shows: \"Tree: tile({exampleTargetTileX},{exampleTargetTileY})\"");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Tree at tile({exampleTargetTileX},{exampleTargetTileY})\",");
+            sb.AppendLine($"  \"thought\": \"Chop the tree\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"chop\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  (chop action auto-moves, no separate move needed)");
+            sb.AppendLine($"  After chopping:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Tree chopped successfully\",");
+            sb.AppendLine($"  \"thought\": \"Task complete\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Chopped tree\"}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"Example 4: Task is \"Chop trees\" but no trees exist");
             sb.AppendLine("{");
             sb.AppendLine($"  \"observation\": \"Moved in multiple directions, scanned 81x81 tile area multiple times, no trees found anywhere\",");
             sb.AppendLine($"  \"thought\": \"After extensive searching across many cycles, no trees are available in this area. Task is impossible.\",");

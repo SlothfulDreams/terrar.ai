@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Xna.Framework;
 using TerrarAI.Content.Actions;
+using TerrarAI.Content.NPCs;
 using Terraria;
 
 namespace TerrarAI.Content.Systems
@@ -69,7 +70,9 @@ namespace TerrarAI.Content.Systems
             state.FrameCounter++;
             if (state.FrameCounter > settings.MaxFrames)
             {
-                return AgentActionResult.Failure($"Movement timed out after {(settings.MaxFrames / 60f):F1}s. Could not reach {targetPixels}.");
+                int targetTileX = (int)(targetPixels.X / 16f);
+                int targetTileY = (int)(targetPixels.Y / 16f);
+                return AgentActionResult.Failure($"Movement timed out after {(settings.MaxFrames / 60f):F1}s. Could not reach tile({targetTileX},{targetTileY}).");
             }
 
             if (state.LastPosition != Vector2.Zero)
@@ -80,7 +83,11 @@ namespace TerrarAI.Content.Systems
                     state.StagnantFrames++;
                     if (state.StagnantFrames > settings.MaxStagnantFrames)
                     {
-                        return AgentActionResult.Failure($"Movement stalled near {npc.Center}. Obstacle likely blocking path to {targetPixels}.");
+                        int currentTileX = (int)(npc.Center.X / 16f);
+                        int currentTileY = (int)(npc.Center.Y / 16f);
+                        int targetTileX = (int)(targetPixels.X / 16f);
+                        int targetTileY = (int)(targetPixels.Y / 16f);
+                        return AgentActionResult.Failure($"Movement stalled near tile({currentTileX},{currentTileY}). Obstacle likely blocking path to tile({targetTileX},{targetTileY}).");
                     }
                 }
                 else
@@ -103,10 +110,14 @@ namespace TerrarAI.Content.Systems
                 {
                     npc.velocity.X = 0f;
                     npc.velocity.Y = 0f;
-                    return AgentActionResult.Success($"Arrived near {targetPixels}");
+                    int targetTileX = (int)(targetPixels.X / 16f);
+                    int targetTileY = (int)(targetPixels.Y / 16f);
+                    return AgentActionResult.Success($"Arrived near tile({targetTileX},{targetTileY})");
                 }
 
-                return AgentActionResult.Pending($"Stopping at {targetPixels}");
+                int pendingTileX = (int)(targetPixels.X / 16f);
+                int pendingTileY = (int)(targetPixels.Y / 16f);
+                return AgentActionResult.Pending($"Stopping at tile({pendingTileX},{pendingTileY})");
             }
 
             if (state.FrameCounter % settings.ToleranceStepInterval == 0)
@@ -146,17 +157,48 @@ namespace TerrarAI.Content.Systems
                 npc.direction = moveDirection;
             }
 
-            // Simplified jump logic - only jump when stuck
+            // Proactive obstacle and gap detection
             bool movingHorizontally = Math.Abs(npc.velocity.X) > 0.5f;
+            
+            if (onGround && movingHorizontally && moveDirection != 0)
+            {
+                bool obstacleAhead = HasObstacleAhead(npc, moveDirection, 20);
+                bool gapAhead = HasGapAhead(npc, moveDirection, 24);
+                
+                // Get jump multiplier from agent if available (for varied jump heights)
+                float jumpMultiplier = 1f;
+                if (npc.ModNPC is AIAgentNPC agent)
+                {
+                    jumpMultiplier = agent.GetJumpMultiplier();
+                }
+                
+                if (obstacleAhead)
+                {
+                    // Jump over obstacle
+                    TryJump(npc, moveDirection, -24f, jumpMultiplier);
+                }
+                else if (gapAhead && Math.Abs(delta.X) > 16f)
+                {
+                    // Jump across gap
+                    TryJump(npc, moveDirection, 0f, jumpMultiplier);
+                }
+            }
+            
+            // Fallback: jump when stuck (backup safety)
             int stuckThreshold = Math.Max(20, settings.MaxStagnantFrames / 3);
             bool stuck = movingHorizontally && onGround && state.StagnantFrames > stuckThreshold;
 
             if (stuck)
             {
-                TryJump(npc, npc.velocity.X, 0f, 0f);
+                float jumpMultiplier = 1f;
+                if (npc.ModNPC is AIAgentNPC agent)
+                {
+                    jumpMultiplier = agent.GetJumpMultiplier();
+                }
+                TryJump(npc, moveDirection, 0f, jumpMultiplier);
             }
 
-            return AgentActionResult.Pending($"Moving to {targetPixels}");
+            return AgentActionResult.Pending($"Moving to tile({(int)(targetPixels.X / 16f)},{(int)(targetPixels.Y / 16f)})");
         }
 
         /// <summary>

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
@@ -124,6 +125,35 @@ namespace TerrarAI.Content.Systems
             }
 
             return $"Tree: {tiles.Count} trunk tile{(tiles.Count == 1 ? "" : "s")} remaining";
+        }
+
+        /// <summary>
+        /// Finds all unique tree bases near a center tile within a radius.
+        /// </summary>
+        public static List<Point> FindTreeBasesNear(Point centerTile, int radius)
+        {
+            var bases = new HashSet<Point>();
+
+            for (int y = -radius; y <= radius; y += 2)
+            {
+                for (int x = -radius; x <= radius; x += 2)
+                {
+                    int checkX = centerTile.X + x;
+                    int checkY = centerTile.Y + y;
+                    var tile = Framing.GetTileSafely(checkX, checkY);
+
+                    if (tile.HasTile && TileID.Sets.IsATreeTrunk[tile.TileType])
+                    {
+                        var treeBase = FindTreeBase(new Point(checkX, checkY));
+                        if (treeBase.HasValue)
+                        {
+                            bases.Add(treeBase.Value);
+                        }
+                    }
+                }
+            }
+
+            return bases.ToList();
         }
     }
 }

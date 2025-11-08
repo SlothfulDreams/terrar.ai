@@ -74,7 +74,8 @@ namespace TerrarAI.Content.Actions
             else
             {
                 // Need to move closer first
-                _moveAction = new MoveAction(targetPos);
+                var targetTile = new Point((int)(targetPos.X / 16f), (int)(targetPos.Y / 16f));
+                _moveAction = new MoveAction(targetTile);
                 _phase = Phase.MovingToTarget;
                 return AgentActionResult.Pending($"Target {distance:F0}px away, moving closer first...");
             }
