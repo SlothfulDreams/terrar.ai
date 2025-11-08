@@ -1,3 +1,4 @@
+using System;
 using Microsoft.Xna.Framework;
 using Terraria;
 
@@ -19,10 +20,22 @@ public class CompleteAction : AgentAction
 
     public override AgentActionResult Execute(AgentActionContext context)
     {
-        // Send completion message to chat
+        // Only send chat message for failures (detected by keywords)
         if (Main.netMode != Terraria.ID.NetmodeID.Server && !string.IsNullOrWhiteSpace(_message))
         {
-            Main.NewText($"[{context.Agent.GivenName}] {_message}", Color.LimeGreen);
+            bool isFailure = _message.Contains("cannot", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("no ", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("impossible", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                           _message.Contains("can't", StringComparison.OrdinalIgnoreCase);
+
+            if (isFailure)
+            {
+                Main.NewText($"[{context.Agent.GivenName}] {_message}", Color.Orange);
+            }
+            // Success completions are silent (no chat spam)
         }
 
         return AgentActionResult.Success(_message);

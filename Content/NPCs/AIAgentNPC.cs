@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -50,9 +49,9 @@ namespace TerrarAI.Content.NPCs
         private long _planningStartTick;
         private long _maxPlanningTicks;
 
-        // Streaming thoughts
-        private readonly ConcurrentQueue<string> _thoughtChunks = new();
-        private readonly StringBuilder _accumulatedResponse = new();
+        // Conversation history for ReAct pattern memory
+        private readonly List<(string role, string content)> _conversationHistory = new();
+        private const int MAX_HISTORY_MESSAGES = 20; // Last 10 exchanges (user+assistant pairs)
 
         // Player appearance clone (stored for rendering as player)
         private Player? _appearanceClone;
@@ -179,8 +178,8 @@ namespace TerrarAI.Content.NPCs
                 return;
             }
 
-            // Diagnostic logging - only log when Planning to reduce spam
-            if (State == AgentState.Planning)
+            // Diagnostic logging - log Planning and Executing states
+            if (State == AgentState.Planning || State == AgentState.Executing)
             {
                 Mod.Logger.Info($"[AI] Called. State={State}, _stateBacking={_stateBacking}, NPC.ai[0]={NPC.ai[0]}, IsServer={ServerAuthority.IsServer}");
             }
@@ -194,7 +193,9 @@ namespace TerrarAI.Content.NPCs
                     TickPlanning();
                     break;
                 case AgentState.Executing:
+                    Mod.Logger.Info("[AI] Dispatching to TickExecuting()");
                     TickExecuting();
+                    Mod.Logger.Info("[AI] Returned from TickExecuting()");
                     break;
                 case AgentState.Replanning:
                     TickReplanning();
@@ -307,6 +308,7 @@ namespace TerrarAI.Content.NPCs
             _replanContext = null;
             _previousActionResult = null;
             _replanCycleCount = 0;  // Reset replan counter for new task
+            _conversationHistory.Clear();  // Clear conversation history for new task
             _lastPlannerError = null;
 
             _actionQueue.Clear();
@@ -494,16 +496,6 @@ namespace TerrarAI.Content.NPCs
                 return;
             }
 
-            // Process streaming thought chunks
-            while (_thoughtChunks.TryDequeue(out var chunk))
-            {
-                var config = TerrarAI_Config.Get();
-                if (config.ShowAgentThoughts)
-                {
-                    SendChatMessage(chunk, Color.LightBlue);
-                }
-            }
-
             // Diagnostic logging
             Mod.Logger.Info($"[TickPlanning] Task status: IsCompleted={_plannerTask.IsCompleted}, IsFaulted={_plannerTask.IsFaulted}, IsCanceled={_plannerTask.IsCanceled}, Status={_plannerTask.Status}");
 
@@ -574,16 +566,20 @@ namespace TerrarAI.Content.NPCs
 
         private void TickExecuting()
         {
+            Mod.Logger.Info($"[TickExecuting] Entry - _currentAction={((_currentAction == null) ? "null" : _currentAction.Name)}, queueCount={_actionQueue.Count}");
+
             if (_currentAction == null)
             {
                 if (_actionQueue.Count == 0)
                 {
+                    Mod.Logger.Info("[TickExecuting] No actions in queue, transitioning to Completed");
                     State = AgentState.Completed;
                     UpdateStatus("Plan complete.");
                     return;
                 }
 
                 _currentAction = _actionQueue.Dequeue();
+                Mod.Logger.Info($"[TickExecuting] Dequeued action: {_currentAction.Name}");
                 _currentAction.Reset();
                 UpdateStatus($"Executing {_currentAction.Name}...");
             }
@@ -612,7 +608,9 @@ namespace TerrarAI.Content.NPCs
             }
 
             var context = AgentActionContext.From(NPC, _commander);
+            Mod.Logger.Info($"[TickExecuting] About to execute action: {_currentAction.Name}");
             var result = _currentAction.Execute(context);
+            Mod.Logger.Info($"[TickExecuting] Action {_currentAction.Name} returned status: {result.Status}, message: {result.Message}");
 
             switch (result.Status)
             {
@@ -755,10 +753,6 @@ namespace TerrarAI.Content.NPCs
             _planningStartTick = Main.GameUpdateCount;
             _maxPlanningTicks = config.MaxPlanningSeconds * 60; // Convert seconds to ticks (60 FPS)
 
-            // Clear previous streaming data
-            while (_thoughtChunks.TryDequeue(out _)) { }
-            _accumulatedResponse.Clear();
-
             // Notify player that planning has started
             string commandPreview = _currentCommand!.Length > 50
                 ? _currentCommand.Substring(0, 47) + "..."
@@ -776,14 +770,25 @@ namespace TerrarAI.Content.NPCs
                 var systemPrompt = BuildSystemPrompt();
                 var userPrompt = BuildUserPrompt(_currentCommand!, _replanContext);
 
-                // Stream the response and accumulate it
-                await foreach (var chunk in TerrarAI.RequireClient().SendChatCompletionStreamAsync(systemPrompt, userPrompt, CancellationToken.None).ConfigureAwait(false))
+                // Use non-streaming API call (simpler)
+                var result = await TerrarAI.RequireClient()
+                    .SendChatCompletionAsync(systemPrompt, userPrompt, _conversationHistory, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                // Store assistant's response in conversation history for context continuity
+                _conversationHistory.Add(("assistant", result));
+
+                // Send LLM response to chat if ShowAgentThoughts is enabled
+                var config = TerrarAI_Config.Get();
+                if (config.ShowAgentThoughts)
                 {
-                    _thoughtChunks.Enqueue(chunk);
-                    _accumulatedResponse.Append(chunk);
+                    // Queue the message to be sent on the main thread
+                    Main.QueueMainThreadAction(() =>
+                    {
+                        SendChatMessage(result, Color.LightBlue);
+                    });
                 }
 
-                var result = _accumulatedResponse.ToString();
                 Mod.Logger.Info($"[ExecutePlanningAsync] Completed! Result length={result.Length}, content={result}");
                 return result;
             }
@@ -854,9 +859,8 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine($"- You are facing: {(NPC.direction > 0 ? "RIGHT" : "LEFT")} (direction={NPC.direction})");
             sb.AppendLine("- X axis: increases rightward (→), decreases leftward (←)");
             sb.AppendLine("- Y axis: increases downward (↓), decreases upward (↑)");
-            sb.AppendLine("- Tile coordinates = pixel coordinates ÷ 16 (truncate decimals)");
-            sb.AppendLine("- Pixel coordinates = tile coordinates × 16 + 8 (centers on tile)");
             sb.AppendLine($"- Your position: tile({agentTileX},{agentTileY}) = pixels({pixelPos.X:F0},{pixelPos.Y:F0})");
+            sb.AppendLine("- All tile descriptions include BOTH tile and pixel coordinates - use the pixel coordinates directly");
             sb.AppendLine("- \"In front of you\" = tiles with higher X if facing right, lower X if facing left");
 
             // List available tools from commander's inventory
@@ -922,9 +926,8 @@ namespace TerrarAI.Content.NPCs
 
             sb.AppendLine();
             sb.AppendLine("IMPORTANT RULES:");
-            sb.AppendLine("- Use ABSOLUTE tile/pixel coordinates (not offsets like +5 or -3)");
-            sb.AppendLine("- Convert tile to pixel: pixel = tile × 16 + 8");
-            sb.AppendLine("- Convert pixel to tile: tile = pixel ÷ 16 (truncate)");
+            sb.AppendLine("- Use ABSOLUTE coordinates (not offsets like +5 or -3)");
+            sb.AppendLine("- Tile descriptions include pixel coordinates - use them directly for move actions");
             sb.AppendLine("- Check NEARBY RESOURCES section for available resources with coordinates");
             sb.AppendLine("- Check tool requirements - mining ore/stone needs appropriate pickaxe power");
             sb.AppendLine("- Plan movement BEFORE mining/placing if target is not marked REACHABLE");
@@ -941,18 +944,25 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("}");
             sb.AppendLine();
             sb.AppendLine("CONCRETE EXAMPLES:");
-            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", you see copper at tile({agentTileX + 5},{agentTileY}), you're at tile({agentTileX},{agentTileY})");
+
+            // Calculate example pixel coordinates for the examples
+            int exampleTargetTileX = agentTileX + 5;
+            int exampleTargetTileY = agentTileY;
+            int exampleTargetPixelX = exampleTargetTileX * 16 + 8;
+            int exampleTargetPixelY = exampleTargetTileY * 16 + 8;
+
+            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", NEARBY RESOURCES shows: \"Copper at tile({exampleTargetTileX},{exampleTargetTileY}) pixels({exampleTargetPixelX},{exampleTargetPixelY}) 5→ [80px]\"");
             sb.AppendLine($"  First action - Move closer:");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"I'm at tile({agentTileX},{agentTileY}), copper ore visible at tile({agentTileX + 5},{agentTileY}), distance ~80px\",");
-            sb.AppendLine($"  \"thought\": \"Need to move closer to the copper ore before mining it\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"x\":{(agentTileX + 5) * 16 + 8},\"y\":{agentTileY * 16 + 8}}}}}");
+            sb.AppendLine($"  \"observation\": \"I'm at tile({agentTileX},{agentTileY}), copper ore at tile({exampleTargetTileX},{exampleTargetTileY}) pixels({exampleTargetPixelX},{exampleTargetPixelY}), distance 80px\",");
+            sb.AppendLine($"  \"thought\": \"Copper is 80px away, need to move closer using the pixel coordinates from the resource list\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"x\":{exampleTargetPixelX},\"y\":{exampleTargetPixelY}}}}}");
             sb.AppendLine("}");
             sb.AppendLine($"  After moving, second action - Mine it:");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Now at tile({agentTileX + 5},{agentTileY}), copper ore is within reach\",");
-            sb.AppendLine($"  \"thought\": \"I'm close enough to mine the copper ore now\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{agentTileX + 5},\"tileY\":{agentTileY}}}}}");
+            sb.AppendLine($"  \"observation\": \"Now at tile({exampleTargetTileX},{exampleTargetTileY}), copper ore shows as [REACHABLE]\",");
+            sb.AppendLine($"  \"thought\": \"I'm close enough to mine the copper ore now - use tile coordinates for mine action\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY}}}}}");
             sb.AppendLine("}");
             sb.AppendLine($"  After mining, third action - Complete:");
             sb.AppendLine("{");
@@ -987,6 +997,25 @@ namespace TerrarAI.Content.NPCs
         private string BuildUserPrompt(string command, string? context)
         {
             var sb = new StringBuilder();
+
+            // Manage conversation history
+            if (_replanCycleCount == 0)
+            {
+                // First cycle: Initialize history with the task
+                _conversationHistory.Clear();
+                _conversationHistory.Add(("user", $"Task: {command}"));
+            }
+            else if (!string.IsNullOrWhiteSpace(context))
+            {
+                // Subsequent cycles: Add action feedback to history
+                _conversationHistory.Add(("user", $"Action result: {context}"));
+            }
+
+            // Trim history to prevent token limit issues
+            while (_conversationHistory.Count > MAX_HISTORY_MESSAGES)
+            {
+                _conversationHistory.RemoveAt(0);
+            }
 
             // Original task
             sb.AppendLine("ORIGINAL TASK:");
@@ -1118,7 +1147,11 @@ namespace TerrarAI.Content.NPCs
                     var direction = GetDirectionString(relX, relY);
                     var reachableStr = reachable ? "REACHABLE" : $"{distance:F0}px";
 
-                    builder.Append($"tile({tileX},{tileY}) {direction} [{reachableStr}]; ");
+                    // Provide pixel coordinates directly - no LLM math needed
+                    var pixelX = tileX * 16 + 8;
+                    var pixelY = tileY * 16 + 8;
+
+                    builder.Append($"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) {direction} [{reachableStr}]; ");
                 }
 
                 if (tiles.Count > closestTiles.Count)
@@ -1264,8 +1297,12 @@ namespace TerrarAI.Content.NPCs
                         }
                     }
 
+                    // Provide pixel coordinates directly - no LLM math needed
+                    var pixelX = tileX * 16 + 8;
+                    var pixelY = tileY * 16 + 8;
+
                     var reachStr = reachable ? "REACHABLE" : $"{distance:F0}px";
-                    builder.Append($"tile({tileX},{tileY}) {direction} [{reachStr}]{toolStatus}; ");
+                    builder.Append($"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) {direction} [{reachStr}]{toolStatus}; ");
                 }
 
                 if (group.Count() > closest.Count)

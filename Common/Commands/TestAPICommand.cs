@@ -40,7 +40,7 @@ namespace TerrarAI.Common.Commands
                 try
                 {
                     var systemPrompt = "You are TerrarAI, a cheerful helper for Terraria players.";
-                    var response = await TerrarAI.RequireClient().SendChatCompletionAsync(systemPrompt, "Say hello!", CancellationToken.None).ConfigureAwait(false);
+                    var response = await TerrarAI.RequireClient().SendChatCompletionAsync(systemPrompt, "Say hello!", null, CancellationToken.None).ConfigureAwait(false);
 
                     ServerAuthority.QueueMainThread(() =>
                     {

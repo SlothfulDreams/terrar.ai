@@ -13,12 +13,14 @@ namespace TerrarAI.Content.Actions
         private int _damageAccumulated;
         private Item? _currentPickaxe;
         private bool _initialized;
+        private bool _slowMiningToggle;
 
         public MineAction(Point tile)
         {
             _tile = tile;
             _damageAccumulated = 0;
             _initialized = false;
+            _slowMiningToggle = false;
         }
 
         public override string Name => "mine";
@@ -32,6 +34,7 @@ namespace TerrarAI.Content.Actions
             _damageAccumulated = 0;
             _currentPickaxe = null;
             _initialized = false;
+            _slowMiningToggle = false;
         }
 
         public override AgentActionResult Execute(AgentActionContext context)
@@ -167,40 +170,27 @@ namespace TerrarAI.Content.Actions
         {
             int tileStrength = ToolSelector.GetTileStrength(tileType);
 
-            // Reduced damage values for realistic mining time (1-3 seconds)
-            int baseDamage = 1;
-
             if (pickaxePower >= tileStrength * 2)
             {
                 // Pickaxe is 2x stronger than needed: 2 damage/tick (50 ticks = 0.83 seconds)
-                baseDamage = 2;
-            }
-            else if (pickaxePower >= tileStrength * 1.5f)
-            {
-                // Pickaxe is 1.5x stronger: 1 damage/tick (100 ticks = 1.67 seconds)
-                baseDamage = 1;
-            }
-            else if (pickaxePower >= tileStrength * 1.2f)
-            {
-                // Pickaxe is moderately stronger: 1 damage/tick (100 ticks = 1.67 seconds)
-                baseDamage = 1;
-            }
-            else
-            {
-                // Pickaxe barely strong enough: Very slow mining
-                // Use counter-based approach for fractional damage (0.5 damage/tick = 200 ticks = 3.33 seconds)
-                // Every other tick adds damage
-                if (_damageAccumulated % 2 == 0)
-                {
-                    baseDamage = 1;
-                }
-                else
-                {
-                    baseDamage = 0;
-                }
+                return 2;
             }
 
-            return baseDamage;
+            if (pickaxePower >= tileStrength * 1.5f)
+            {
+                // Pickaxe is 1.5x stronger: 1 damage/tick (100 ticks = 1.67 seconds)
+                return 1;
+            }
+
+            if (pickaxePower >= tileStrength * 1.2f)
+            {
+                // Pickaxe is moderately stronger: 1 damage/tick (100 ticks = 1.67 seconds)
+                return 1;
+            }
+
+            // Pickaxe barely strong enough: simulate 0.5 damage/tick by alternating between 1 and 0
+            _slowMiningToggle = !_slowMiningToggle;
+            return _slowMiningToggle ? 1 : 0;
         }
     }
 }

@@ -26,7 +26,7 @@ namespace TerrarAI.Content.Systems
             _httpClient.Timeout = TimeSpan.FromSeconds(config.RequestTimeoutSeconds);
         }
 
-        public async Task<string> SendChatCompletionAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken = default)
+        public async Task<string> SendChatCompletionAsync(string systemPrompt, string userPrompt, List<(string role, string content)> conversationHistory = null, CancellationToken cancellationToken = default)
         {
             var config = TerrarAI_Config.Get();
             var apiKey = config.GetEffectiveApiKey();
@@ -46,7 +46,7 @@ namespace TerrarAI.Content.Systems
 
             var request = new HttpRequestMessage(HttpMethod.Post, config.BaseEndpoint)
             {
-                Content = new StringContent(BuildPayload(config.Model, config.Temperature, systemPrompt, userPrompt), Encoding.UTF8, "application/json")
+                Content = new StringContent(BuildPayload(config.Model, config.Temperature, systemPrompt, userPrompt, conversationHistory), Encoding.UTF8, "application/json")
             };
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
@@ -201,18 +201,32 @@ namespace TerrarAI.Content.Systems
             }
         }
 
-        private static string BuildPayload(string model, float temperature, string systemPrompt, string userPrompt, bool stream = false)
+        private static string BuildPayload(string model, float temperature, string systemPrompt, string userPrompt, List<(string role, string content)> conversationHistory = null, bool stream = false)
         {
+            // Build messages array with conversation history
+            var messagesList = new List<object>
+            {
+                new { role = "system", content = systemPrompt }
+            };
+
+            // Add conversation history if provided
+            if (conversationHistory != null && conversationHistory.Count > 0)
+            {
+                foreach (var (role, content) in conversationHistory)
+                {
+                    messagesList.Add(new { role, content });
+                }
+            }
+
+            // Add current user prompt last
+            messagesList.Add(new { role = "user", content = userPrompt });
+
             var payload = new
             {
                 model,
                 temperature,
                 stream,
-                messages = new[]
-                {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userPrompt }
-                }
+                messages = messagesList.ToArray()
             };
 
             return JsonSerializer.Serialize(payload, SerializerOptions);
