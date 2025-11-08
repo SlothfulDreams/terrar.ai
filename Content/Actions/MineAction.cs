@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Xna.Framework;
 using TerrarAI.Content.NPCs;
 using TerrarAI.Content.Systems;
@@ -7,17 +8,15 @@ using Terraria.ModLoader;
 
 namespace TerrarAI.Content.Actions
 {
-    public sealed class MineAction : AgentAction
+    public sealed class MineAction : TileTargetAction
     {
-        private readonly Point _tile;
         private int _damageAccumulated;
         private Item? _currentPickaxe;
         private bool _initialized;
         private bool _slowMiningToggle;
 
-        public MineAction(Point tile)
+        public MineAction(Point tile) : base(tile)
         {
-            _tile = tile;
             _damageAccumulated = 0;
             _initialized = false;
             _slowMiningToggle = false;
@@ -27,17 +26,16 @@ namespace TerrarAI.Content.Actions
 
         public override float GetRequiredRange() => 80f;  // 5 tiles = 80 pixels (standard player reach)
 
-        public override Point? GetTargetTile() => _tile;
-
         public override void Reset()
         {
+            base.Reset();
             _damageAccumulated = 0;
             _currentPickaxe = null;
             _initialized = false;
             _slowMiningToggle = false;
         }
 
-        public override AgentActionResult Execute(AgentActionContext context)
+        protected override AgentActionResult OnTick(AgentActionContext context)
         {
             if (!ServerAuthority.IsServer)
             {
@@ -69,10 +67,10 @@ namespace TerrarAI.Content.Actions
                 context.Agent.velocity.Y = 0f;
 
                 // Check if tile exists
-                var tile = Framing.GetTileSafely(_tile.X, _tile.Y);
+                var tile = Framing.GetTileSafely(Tile.X, Tile.Y);
                 if (!tile.HasTile)
                 {
-                    return AgentActionResult.Success($"Tile {_tile.X},{_tile.Y} already empty.");
+                    return AgentActionResult.Success($"Tile {Tile.X},{Tile.Y} already empty.");
                 }
 
                 // Find best pickaxe from commander's inventory
@@ -99,9 +97,7 @@ namespace TerrarAI.Content.Actions
             }
 
             // POSITION VALIDATION: Verify agent hasn't drifted out of range
-            var tileCenterX = _tile.X * 16f + 8f;
-            var tileCenterY = _tile.Y * 16f + 8f;
-            var targetPos = new Vector2(tileCenterX, tileCenterY);
+            var targetPos = GetTileWorldCenter();
             var currentDistance = Vector2.Distance(context.Agent.Center, targetPos);
 
             if (currentDistance > GetRequiredRange())
@@ -115,10 +111,10 @@ namespace TerrarAI.Content.Actions
             context.Agent.velocity.Y *= 0.5f;
 
             // Check if tile still exists
-            var currentTile = Framing.GetTileSafely(_tile.X, _tile.Y);
+            var currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
             if (!currentTile.HasTile)
             {
-                return AgentActionResult.Success($"Mined tile at {_tile.X},{_tile.Y}");
+                return AgentActionResult.Success($"Mined tile at {Tile.X},{Tile.Y}");
             }
 
             // Calculate mining damage based on pickaxe power
@@ -135,31 +131,31 @@ namespace TerrarAI.Content.Actions
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)
             {
-                WorldGen.KillTile(_tile.X, _tile.Y, false, false, true);
+                WorldGen.KillTile(Tile.X, Tile.Y, false, false, true);
 
                 // Sync tile change in multiplayer
                 if (Main.netMode == NetmodeID.Server)
                 {
-                    NetMessage.SendTileSquare(-1, _tile.X, _tile.Y, 1);
+                    NetMessage.SendTileSquare(-1, Tile.X, Tile.Y, 1);
                 }
 
                 // Verify tile was destroyed
                 string tileNameBeforeDestroy = TileID.Search.GetName(currentTile.TileType);
-                currentTile = Framing.GetTileSafely(_tile.X, _tile.Y);
+                currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
                 if (!currentTile.HasTile)
                 {
-                    return AgentActionResult.Success($"Successfully mined {tileNameBeforeDestroy} at tile({_tile.X},{_tile.Y}) using {_currentPickaxe.Name}");
+                    return AgentActionResult.Success($"Successfully mined {tileNameBeforeDestroy} at tile({Tile.X},{Tile.Y}) using {_currentPickaxe.Name}");
                 }
                 else
                 {
-                    return AgentActionResult.Failure($"Failed to destroy {tileNameBeforeDestroy} at tile({_tile.X},{_tile.Y}). Tile may be protected or require different tool.");
+                    return AgentActionResult.Failure($"Failed to destroy {tileNameBeforeDestroy} at tile({Tile.X},{Tile.Y}). Tile may be protected or require different tool.");
                 }
             }
 
             // Still mining - show progress with tile name
             int progressPercent = _damageAccumulated;
             string currentTileName = TileID.Search.GetName(currentTile.TileType);
-            return AgentActionResult.Pending($"Mining {currentTileName} at tile({_tile.X},{_tile.Y})... ({progressPercent}%)");
+            return AgentActionResult.Pending($"Mining {currentTileName} at tile({Tile.X},{Tile.Y})... ({progressPercent}%)");
         }
 
         /// <summary>
@@ -191,6 +187,14 @@ namespace TerrarAI.Content.Actions
             // Pickaxe barely strong enough: simulate 0.5 damage/tick by alternating between 1 and 0
             _slowMiningToggle = !_slowMiningToggle;
             return _slowMiningToggle ? 1 : 0;
+        }
+
+        public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
+        {
+            var tileX = ActionParameterReader.ReadInt(parameters, "tileX");
+            var tileY = ActionParameterReader.ReadInt(parameters, "tileY");
+            var clamped = validator.ClampTilePosition(tileX, tileY);
+            return new MineAction(clamped);
         }
     }
 }

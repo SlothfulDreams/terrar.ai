@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Xna.Framework;
 using TerrarAI.Content.Systems;
 using Terraria;
@@ -19,7 +20,7 @@ namespace TerrarAI.Content.Actions
 
         public override string Name => "say";
 
-        public override AgentActionResult Execute(AgentActionContext context)
+        protected override AgentActionResult OnTick(AgentActionContext context)
         {
             if (_completed)
             {
@@ -49,7 +50,14 @@ namespace TerrarAI.Content.Actions
 
         public override void Reset()
         {
+            base.Reset();
             _completed = false;
+        }
+
+        public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
+        {
+            var text = ActionParameterReader.ReadString(parameters, "text", required: false);
+            return new SayAction(text);
         }
     }
 }

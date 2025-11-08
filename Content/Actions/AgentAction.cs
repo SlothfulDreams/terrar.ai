@@ -5,12 +5,32 @@ namespace TerrarAI.Content.Actions
 {
     public abstract class AgentAction
     {
+        private bool _hasEntered;
+
         public abstract string Name { get; }
 
-        public abstract AgentActionResult Execute(AgentActionContext context);
+        internal AgentActionResult Tick(AgentActionContext context)
+        {
+            if (!_hasEntered)
+            {
+                OnEnter(context);
+                _hasEntered = true;
+            }
+
+            var result = OnTick(context);
+
+            if (result.Status != AgentActionStatus.Pending)
+            {
+                OnExit(context, result);
+                _hasEntered = false;
+            }
+
+            return result;
+        }
 
         public virtual void Reset()
         {
+            _hasEntered = false;
         }
 
         /// <summary>
@@ -30,6 +50,16 @@ namespace TerrarAI.Content.Actions
         /// Return null if action is not position-based.
         /// </summary>
         public virtual Vector2? GetTargetPosition() => null;
+
+        protected virtual void OnEnter(AgentActionContext context)
+        {
+        }
+
+        protected abstract AgentActionResult OnTick(AgentActionContext context);
+
+        protected virtual void OnExit(AgentActionContext context, AgentActionResult result)
+        {
+        }
     }
 
     public readonly record struct AgentActionContext(NPC Agent, Player? Commander)

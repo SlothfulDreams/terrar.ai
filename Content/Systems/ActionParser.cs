@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
-using Microsoft.Xna.Framework;
 using TerrarAI.Content.Actions;
 using Terraria;
 
@@ -52,9 +51,9 @@ namespace TerrarAI.Content.Systems
                 }
 
                 var type = typeElement.GetString()?.ToLowerInvariant() ?? string.Empty;
-                var parameters = GetParams(element);
+                var parameters = ActionParameterReader.GetParams(element);
 
-                var action = CreateAction(type, parameters, validator);
+                var action = ActionRegistry.Create(type, parameters, validator);
                 actions.Add(action);
             }
 
@@ -95,101 +94,11 @@ namespace TerrarAI.Content.Systems
             }
 
             var type = typeElement.GetString()?.ToLowerInvariant() ?? string.Empty;
-            var parameters = GetParams(actionElement);
+            var parameters = ActionParameterReader.GetParams(actionElement);
 
-            var action = CreateAction(type, parameters, validator);
+            var action = ActionRegistry.Create(type, parameters, validator);
 
             return new List<AgentAction> { action };
-        }
-
-        private static AgentAction CreateAction(string type, JsonElement parameters, ActionValidator validator)
-        {
-            return type switch
-            {
-                "say" => new SayAction(ReadString(parameters, "text", required: true)),
-                "move" => CreateMoveAction(parameters, validator),
-                "mine" => CreateMineAction(parameters, validator),
-                "place" => CreatePlaceAction(parameters, validator),
-                "complete" => new CompleteAction(ReadString(parameters, "message", required: false)),
-                _ => throw new ActionParserException($"Unknown action type '{type}'.")
-            };
-        }
-
-        private static AgentAction CreateMoveAction(JsonElement parameters, ActionValidator validator)
-        {
-            var x = ReadNumber(parameters, "x");
-            var y = ReadNumber(parameters, "y");
-            var clamped = validator.ClampPixelPosition(x, y);
-            return new MoveAction(clamped);
-        }
-
-        private static AgentAction CreateMineAction(JsonElement parameters, ActionValidator validator)
-        {
-            var tileX = ReadInt(parameters, "tileX");
-            var tileY = ReadInt(parameters, "tileY");
-            var clamped = validator.ClampTilePosition(tileX, tileY);
-            return new MineAction(clamped);
-        }
-
-        private static AgentAction CreatePlaceAction(JsonElement parameters, ActionValidator validator)
-        {
-            var tileX = ReadInt(parameters, "tileX");
-            var tileY = ReadInt(parameters, "tileY");
-            var blockType = ReadInt(parameters, "blockType");
-
-            var clamped = validator.ClampTilePosition(tileX, tileY);
-            var validatedBlock = validator.ValidateBlockType(blockType);
-            return new PlaceBlockAction(clamped, validatedBlock);
-        }
-
-        private static JsonElement GetParams(JsonElement actionElement)
-        {
-            if (actionElement.TryGetProperty("params", out var parameters) && parameters.ValueKind == JsonValueKind.Object)
-            {
-                return parameters;
-            }
-
-            return default;
-        }
-
-        private static string ReadString(JsonElement element, string propertyName, bool required)
-        {
-            if (element.ValueKind == JsonValueKind.Undefined)
-            {
-                if (required)
-                {
-                    throw new ActionParserException($"Action is missing parameters. Expected '{propertyName}'.");
-                }
-
-                return string.Empty;
-            }
-
-            if (!element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != JsonValueKind.String)
-            {
-                if (required)
-                {
-                    throw new ActionParserException($"Missing string property '{propertyName}'.");
-                }
-
-                return string.Empty;
-            }
-
-            return prop.GetString() ?? string.Empty;
-        }
-
-        private static float ReadNumber(JsonElement element, string propertyName)
-        {
-            if (element.ValueKind == JsonValueKind.Undefined || !element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != JsonValueKind.Number)
-            {
-                throw new ActionParserException($"Missing numeric property '{propertyName}'.");
-            }
-
-            return (float)prop.GetDouble();
-        }
-
-        private static int ReadInt(JsonElement element, string propertyName)
-        {
-            return (int)Math.Round(ReadNumber(element, propertyName));
         }
     }
 

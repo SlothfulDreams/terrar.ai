@@ -431,27 +431,7 @@ namespace TerrarAI.Content.NPCs
 
         private void CheckAndJump(float moveDirection)
         {
-            // Check if on ground
-            bool onGround = Collision.SolidCollision(NPC.position + new Vector2(0, NPC.height), NPC.width, 4);
-
-            if (!onGround)
-            {
-                return;
-            }
-
-            // Check for wall ahead
-            int tileX = (int)((NPC.Center.X + moveDirection * 16) / 16f);
-            int tileY = (int)((NPC.Bottom.Y - 8) / 16f);
-
-            Tile tile = Framing.GetTileSafely(tileX, tileY);
-            Tile tileAbove = Framing.GetTileSafely(tileX, tileY - 1);
-
-            // Jump if there's a wall in front or a step up
-            if ((tile.HasTile && Main.tileSolid[tile.TileType]) ||
-                (tileAbove.HasTile && Main.tileSolid[tileAbove.TileType]))
-            {
-                NPC.velocity.Y = -8f; // Jump
-            }
+            MovementHelper.TryJump(NPC, moveDirection, 0f);
         }
 
         private void UpdateFacing()
@@ -600,7 +580,7 @@ namespace TerrarAI.Content.NPCs
                         // Create temporary move action to approach target
                         var moveAction = new MoveAction(targetPos.Value);
                         var moveContext = AgentActionContext.From(NPC, _commander);
-                        moveAction.Execute(moveContext);  // Execute movement this tick
+                        moveAction.Tick(moveContext);  // Execute movement this tick
                     }
 
                     return;  // Continue approaching next tick
@@ -609,7 +589,7 @@ namespace TerrarAI.Content.NPCs
 
             var context = AgentActionContext.From(NPC, _commander);
             Mod.Logger.Info($"[TickExecuting] About to execute action: {_currentAction.Name}");
-            var result = _currentAction.Execute(context);
+            var result = _currentAction.Tick(context);
             Mod.Logger.Info($"[TickExecuting] Action {_currentAction.Name} returned status: {result.Status}, message: {result.Message}");
 
             switch (result.Status)

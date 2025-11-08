@@ -1,5 +1,7 @@
 using System;
+using System.Text.Json;
 using Microsoft.Xna.Framework;
+using TerrarAI.Content.Systems;
 using Terraria;
 
 namespace TerrarAI.Content.Actions;
@@ -18,7 +20,7 @@ public class CompleteAction : AgentAction
 
     public override string Name => "Complete";
 
-    public override AgentActionResult Execute(AgentActionContext context)
+    protected override AgentActionResult OnTick(AgentActionContext context)
     {
         // Only send chat message for failures (detected by keywords)
         if (Main.netMode != Terraria.ID.NetmodeID.Server && !string.IsNullOrWhiteSpace(_message))
@@ -43,6 +45,18 @@ public class CompleteAction : AgentAction
 
     public override void Reset()
     {
+        base.Reset();
         // Nothing to reset
+    }
+
+    public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
+    {
+        var message = ActionParameterReader.ReadString(parameters, "message", required: false);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message = "Task complete.";
+        }
+
+        return new CompleteAction(message);
     }
 }
