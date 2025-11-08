@@ -13,8 +13,8 @@ namespace TerrarAI
         [DefaultValue("")]
         public string ApiKey { get; set; } = string.Empty;
 
-        [DefaultValue("grok-4-fast-reasoning")]
-        public string Model { get; set; } = "grok-4-fast-reasoning";
+        [DefaultValue("grok-4-fast-non-reasoning")]
+        public string Model { get; set; } = "grok-4-fast-non-reasoning";
 
         [Range(0f, 2f)]
         [DefaultValue(0.7f)]
