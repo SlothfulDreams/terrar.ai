@@ -12,9 +12,9 @@ namespace TerrarAI.Common.Commands
     {
         public override CommandType Type => CommandType.Chat;
 
-        public override string Command => "agentcmd";
+        public override string Command => "action";
 
-        public override string Usage => "/agentcmd <instruction text>";
+        public override string Usage => "/action <instruction text>";
 
         public override string Description => "Sends a natural-language instruction to the nearest TerrarAI agent.";
 
@@ -22,7 +22,7 @@ namespace TerrarAI.Common.Commands
         {
             if (args.Length == 0)
             {
-                caller.Reply("Usage: /agentcmd <instruction text>", Color.OrangeRed);
+                caller.Reply("Usage: /action <instruction text>", Color.OrangeRed);
                 return;
             }
 
@@ -36,7 +36,7 @@ namespace TerrarAI.Common.Commands
 
             if (agent == null)
             {
-                caller.Reply("No TerrarAI agents nearby. Spawn one with /spawnagent.", Color.OrangeRed);
+                caller.Reply("No TerrarAI agents nearby. Create one with /create.", Color.OrangeRed);
                 return;
             }
 

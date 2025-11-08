@@ -140,9 +140,15 @@ namespace TerrarAI.Content.NPCs
             _appearanceClone.shoeColor = sourcePlayer.shoeColor;
 
             // Copy equipment/armor for visuals
-            for (int i = 0; i < sourcePlayer.armor.Length; i++)
+            var armorLength = Math.Min(_appearanceClone.armor.Length, sourcePlayer.armor.Length);
+            for (int i = 0; i < armorLength; i++)
             {
                 _appearanceClone.armor[i] = sourcePlayer.armor[i].Clone();
+            }
+
+            var dyeLength = Math.Min(_appearanceClone.dye.Length, sourcePlayer.dye.Length);
+            for (int i = 0; i < dyeLength; i++)
+            {
                 _appearanceClone.dye[i] = sourcePlayer.dye[i].Clone();
             }
 

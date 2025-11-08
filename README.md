@@ -19,34 +19,34 @@ An AI-powered agent mod for Terraria tModLoader that lets you spawn intelligent 
 
 ## Getting Started
 
-### Step 1: Spawn an Agent
+### Step 1: Create an Agent
 
 1. Press **T** or **Enter** to open Terraria's chat
 2. Type one of the following:
    ```
-   /spawnagent
+   /create
    ```
    Or with a custom name:
    ```
-   /spawnagent Builder
-   /spawnagent Miner Bot
+   /create Builder
+   /create Miner Bot
    ```
 3. Press **Enter** to execute the command
-4. An AI agent will spawn near your character
+4. An AI agent will appear near your character
 5. You should see a chat message: "[Agent] Planning: [your spawned agent]"
 
-**Note:** Only the server host can spawn agents (in singleplayer, you are the host).
+**Note:** Only the server host can create agents (in singleplayer, you are the host).
 
 ### Step 2: Command Your Agent
 
-Once you have spawned an agent, give it commands using chat:
+Once you have created an agent, give it commands using chat:
 
 1. Press **T** or **Enter** to open chat
 2. Type your command:
    ```
-   /agentcmd Go gather some wood
-   /agentcmd Build a 10 block tall tower
-   /agentcmd Mine some iron ore
+   /action Go gather some wood
+   /action Build a 10 block tall tower
+   /action Mine some iron ore
    ```
 3. Press **Enter** to send
 
@@ -60,18 +60,19 @@ All commands are typed in Terraria's chat (press T or Enter first):
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/spawnagent [name]` | Spawns a new AI agent near you | `/spawnagent Miner` |
-| `/agentcmd <task>` | Sends a task to the nearest agent | `/agentcmd Gather wood` |
+| `/create [name]` | Creates a new AI agent near you | `/create Miner` |
+| `/action <task>` | Sends a task to the nearest agent | `/action Gather wood` |
+| `/remove [all]` | Removes the nearest agent or all agents | `/remove all` |
 | `/testxai` | Test your xAI API connection | `/testxai` |
 
 ## Common Workflow
 
 ```
-1. Press T → Type /spawnagent → Press Enter
+1. Press T → Type /create → Press Enter
    ↓
 2. Agent spawns and confirms in chat
    ↓
-3. Press T → Type /agentcmd Gather some wood → Press Enter
+3. Press T → Type /action Gather some wood → Press Enter
    ↓
 4. Agent plans and executes (you'll see status updates in chat)
 ```
@@ -128,10 +129,10 @@ Before spawning agents, test your xAI API connection:
 
 ### "No agent nearby" Error
 
-**Cause:** No agent within 960 pixels of you when you ran `/agentcmd`
+**Cause:** No agent within 960 pixels of you when you ran `/action`
 
 **Solution:**
-- Spawn an agent first with `/spawnagent`
+- Create an agent first with `/create`
 - Move closer to your existing agent
 - The command targets the nearest agent within range
 

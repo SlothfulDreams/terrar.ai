@@ -11,15 +11,15 @@ namespace TerrarAI.Common.Commands
     {
         public override CommandType Type => CommandType.Chat;
 
-        public override string Command => "spawnagent";
+        public override string Command => "create";
 
-        public override string Usage => "/spawnagent [optional name]";
+        public override string Usage => "/create [optional name]";
 
-        public override string Description => "Spawns a TerrarAI agent near you.";
+        public override string Description => "Creates a TerrarAI agent near you.";
 
         public override void Action(CommandCaller caller, string input, string[] args)
         {
-            if (!ServerAuthority.EnsureServer(message => caller.Reply(message, Color.OrangeRed), "Only the server host can spawn agents."))
+            if (!ServerAuthority.EnsureServer(message => caller.Reply(message, Color.OrangeRed), "Only the server host can create agents."))
             {
                 return;
             }
@@ -44,7 +44,7 @@ namespace TerrarAI.Common.Commands
                 npc.GivenName = string.Join(' ', args);
             }
 
-            caller.Reply("TerrarAI agent spawned!", Color.LightGreen);
+            caller.Reply("TerrarAI agent created!", Color.LightGreen);
         }
     }
 }

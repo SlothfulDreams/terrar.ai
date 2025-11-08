@@ -8,7 +8,7 @@ Players type natural language commands → AI agents execute tasks in-game
 ## CURRENT STATE
 - **Phase 1 ✅ COMPLETE**: Config system, xAI client, `/testxai` command, server-only helpers all implemented and tested.
 - **Phase 2 ✅ COMPLETE**: AgentAction hierarchy, parser + validator, move/mine/place/say behaviors fully implemented and compiling. Actions now include range validation, stability checks, and position verification during execution.
-- **Phase 3 ✅ COMPLETE**: AIAgentNPC with full state machine, `/spawnagent` and `/agentcmd` commands working. Agents now render as full player character clones with all animations (skin, hair, armor, accessories). Planning phase includes verbose logging, HTTP timeouts, planning timeouts, and chat notifications for visibility.
+- **Phase 3 ✅ COMPLETE**: AIAgentNPC with full state machine, `/create` and `/action` commands working. Agents now render as full player character clones with all animations (skin, hair, armor, accessories). Planning phase includes verbose logging, HTTP timeouts, planning timeouts, and chat notifications for visibility.
 - **Phase 4 ✅ ENHANCED**: Advanced context gathering implemented including:
   - **Tile Scanning**: Expanded from 3×3 to 21×21 grid (441 tiles) with absolute coordinates, distances, and reachability status
   - **Resource Discovery**: Dedicated `DescribeNearbyResources()` scans 31×31 grid for ores, trees, gems with tool requirement validation
@@ -141,7 +141,7 @@ Create the main agent NPC entity with state machine and xAI integration.
 8. Parse xAI response using ActionParser
 9. Execute actions from queue frame-by-frame
 10. Add PostDraw() visual state indicator above agent
-11. Create /spawnagent command
+11. Create /create command
 12. Extract common movement logic into MovementHelper (ground checks, jump assist, adaptive tolerance)
 13. Support creative-mode travel/tools (config toggle) so NPCs can snap to coordinates and place blocks without inventory limits
 14. Detect hellevator/vertical-digging commands and enforce a 2x2 shaft (column clamping + auto-centering) regardless of model output
@@ -192,7 +192,7 @@ Format: {"actions": [{"type": "action", "params": {...}}]}
 ```
 
 ### Success Criteria
-- Agent spawns with /spawnagent command
+- Agent spawns with /create command
 - Agent receives commands via ReceiveCommand()
 - Agent calls xAI API without blocking game thread
 - Agent parses response and executes action queue
@@ -490,8 +490,8 @@ TerrarAI/
 │       └── BuildTask.cs           # ❌ Phase 5 (not implemented - shared construction task)
 ├── Common/
 │   └── Commands/
-│       ├── SpawnAgentCommand.cs   # ✅ /spawnagent
-│       ├── AgentCommand.cs        # ✅ /agentcmd
+│       ├── SpawnAgentCommand.cs   # ✅ /create
+│       ├── AgentCommand.cs        # ✅ /action
 │       ├── TestAPICommand.cs      # ✅ /testxai
 │       └── MultiAgentBuildCommand.cs  # ❌ Phase 5 (not implemented - /agentbuild)
 └── Tests/
@@ -522,8 +522,8 @@ Beyond in-game QA, add a lightweight `Tests/TerrarAI.Tests` project (xUnit/NUnit
 - Add parser validation tests covering out-of-bounds coordinates and unsupported block types
 
 ### Phase 3 Tests
-- Spawn agent with /spawnagent
-- Send command via /agentcmd
+- Create agent with /create
+- Send command via /action
 - Verify state transitions (watch state display)
 - Test simple commands: "say hello", "move to 1000 500"
 - Verify agent renders as player character clone
