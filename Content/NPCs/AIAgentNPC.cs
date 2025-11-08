@@ -44,8 +44,14 @@ namespace TerrarAI.Content.NPCs
         private bool _hellevatorMode;
         private int? _hellevatorColumnLeft;
         private float? _hellevatorCenterPixelX;
+        private int _autoCollectTicksRemaining;
 
-        private const float IdleFriction = 0.85f;
+        // Target locking to prevent switching between resources mid-task
+        private Point? _lockedMineTarget;  // For single-tile resources or tree BASE position
+        private string? _lockReason;
+        private bool _isLockedTargetTree;  // True if locked target is a tree structure
+
+
         private const int MAX_REPLAN_CYCLES = 25;  // Maximum replanning attempts before forcing completion
 
         // Planning timeout tracking
@@ -225,7 +231,7 @@ namespace TerrarAI.Content.NPCs
             if (!ServerAuthority.IsServer)
             {
                 // Client copies state via net sync; keep visuals simple.
-                NPC.velocity *= IdleFriction;
+                MovementHelper.ApplyFriction(NPC, 1.0f);
                 UpdateFacing();
                 return;
             }
@@ -263,6 +269,7 @@ namespace TerrarAI.Content.NPCs
                     break;
             }
 
+            TickAutoCollect();
             UpdateFacing();
             UpdateItemRotation();
         }
@@ -368,6 +375,7 @@ namespace TerrarAI.Content.NPCs
             _hellevatorMode = DetectHellevatorCommand(_currentCommand);
             _hellevatorColumnLeft = null;
             _hellevatorCenterPixelX = null;
+            ClearTargetLock();  // Clear target lock for new command
 
             State = AgentState.Planning;
             UpdateStatus("Planning...");
@@ -411,7 +419,7 @@ namespace TerrarAI.Content.NPCs
 
         private void ApplyIdlePhysics()
         {
-            NPC.velocity.X *= IdleFriction;
+            MovementHelper.ApplyFriction(NPC, 1.0f);
         }
 
         private void PerformFollowPlayerAI()
@@ -710,6 +718,45 @@ namespace TerrarAI.Content.NPCs
                 Mod.Logger.Info($"[TickExecuting] Dequeued action: {_currentAction.Name}");
                 _currentAction.Reset();
                 UpdateStatus($"Executing {_currentAction.Name}...");
+
+                // TARGET LOCKING: Lock onto first MineAction target to prevent switching
+                if (_currentAction is MineAction mineAction && !_lockedMineTarget.HasValue)
+                {
+                    var targetTile = mineAction.GetTargetTile();
+                    if (targetTile.HasValue)
+                    {
+                        var tile = Framing.GetTileSafely(targetTile.Value.X, targetTile.Value.Y);
+
+                        // Check if this is a tree - if so, lock onto tree base instead of individual tile
+                        if (TreeHelper.IsTreeTile(targetTile.Value))
+                        {
+                            var treeBase = TreeHelper.FindTreeBase(targetTile.Value);
+                            if (treeBase.HasValue)
+                            {
+                                _lockedMineTarget = treeBase.Value;
+                                _lockReason = "tree";
+                                _isLockedTargetTree = true;
+
+                                if (TerrarAI_Config.Get().EnableVerboseLogging)
+                                {
+                                    Mod.Logger.Info($"[Target Lock] Locked onto TREE at base tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Regular single-tile resource
+                            _lockedMineTarget = targetTile.Value;
+                            _lockReason = tile.HasTile ? TileID.Search.GetName(tile.TileType) : "resource";
+                            _isLockedTargetTree = false;
+
+                            if (TerrarAI_Config.Get().EnableVerboseLogging)
+                            {
+                                Mod.Logger.Info($"[Target Lock] Locked onto {_lockReason} at tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                            }
+                        }
+                    }
+                }
             }
 
             // Range validation: Check if agent is close enough to target
@@ -739,6 +786,13 @@ namespace TerrarAI.Content.NPCs
 
             if (_currentAction is not MoveAction)
             {
+                if (!MovementHelper.IsOnGround(NPC) && !MovementHelper.IsStandingOnPlatform(NPC))
+                {
+                    UpdateStatus("Waiting to land...");
+                    ApplyGravityAndCollision();
+                    return;
+                }
+
                 var (distance, targetPos) = GetTargetInfo(_currentAction);
                 float requiredRange = _currentAction.GetRequiredRange();
 
@@ -775,7 +829,7 @@ namespace TerrarAI.Content.NPCs
                     // Note: MineAction also applies its own velocity dampening for stability
                     if (_currentAction is not MoveAction)
                     {
-                        NPC.velocity.X *= 0.5f;  // Strong friction to prevent drifting (was 0.92f - too weak)
+                        MovementHelper.ApplyFriction(NPC, 0.8f);  // Strong friction to prevent drifting
                         NPC.velocity.Y *= 0.85f; // Keep some Y velocity for gravity
                     }
                     break;
@@ -784,6 +838,10 @@ namespace TerrarAI.Content.NPCs
                     {
                         UpdateStatus(result.Message);
                     }
+
+                    // Auto-collect any nearby items after successful action
+                    CollectNearbyItems();
+                    ScheduleAutoCollectBurst();
 
                     // Store the result for the next planning cycle (prompt chaining)
                     var actionName = _currentAction.Name;
@@ -795,12 +853,20 @@ namespace TerrarAI.Content.NPCs
                     _currentAction.Reset();
                     _currentAction = null;
 
+                    // Auto-clear lock if target is fully destroyed (tree fully chopped, ore vein depleted, etc.)
+                    if (_lockedMineTarget.HasValue && !ShouldMaintainLock())
+                    {
+                        ClearTargetLock();
+                    }
+
                     // PROMPT CHAINING: Check if this was a CompleteAction
                     if (isCompleteAction)
                     {
                         // Task is complete, transition to Completed state
                         State = AgentState.Completed;
                         UpdateStatus("Task complete.");
+                        ClearHellevatorState();  // Clear hellevator state on completion
+                        ClearTargetLock();  // Clear target lock on completion
                         _previousActionResult = null;  // Clear for next command
                         _plannerTask = null;  // Clear planner task to allow transition to Idle
                     }
@@ -815,6 +881,7 @@ namespace TerrarAI.Content.NPCs
                             State = AgentState.Completed;
                             UpdateStatus($"Task incomplete after {MAX_REPLAN_CYCLES} attempts.");
                             SendChatMessage($"I've tried {MAX_REPLAN_CYCLES} times but can't complete this task. Giving up.", Color.Orange);
+                            ClearHellevatorState();  // Clear hellevator state on max replan cycles
                             _replanCycleCount = 0;
                             _plannerTask = null;
                             _previousActionResult = null;
@@ -832,9 +899,22 @@ namespace TerrarAI.Content.NPCs
                     break;
                 case AgentActionStatus.Failure:
                     var failureReason = result.Message ?? "Action failed.";
+
+                    // Check if failure is due to unreachable target
+                    bool isUnreachableFailure = failureReason.Contains("out of range", StringComparison.OrdinalIgnoreCase) ||
+                                                failureReason.Contains("drifted", StringComparison.OrdinalIgnoreCase) ||
+                                                failureReason.Contains("could not reach", StringComparison.OrdinalIgnoreCase);
+
+                    if (isUnreachableFailure && _lockedMineTarget.HasValue)
+                    {
+                        SendChatMessage($"Original target ({_lockReason ?? "resource"}) at tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y}) became unreachable. Adapting to find new target.", Color.Orange);
+                        ClearTargetLock();
+                    }
+
                     _currentAction.Reset();
                     _currentAction = null;
                     _actionQueue.Clear();
+                    ClearHellevatorState();  // Clear hellevator state on failure
 
                     _replanContext = failureReason;
                     State = AgentState.Replanning;
@@ -1055,33 +1135,70 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("AVAILABLE ACTIONS:");
             sb.AppendLine("- move(x, y): Move toward absolute pixel coordinates. Actions automatically move you to targets first.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
-            sb.AppendLine("- mine(target OR tileX, tileY): Mine/chop a tile. Can use 'target: nearest_trees' or explicit coordinates. Auto-moves and selects correct tool.");
+            sb.AppendLine("- mine(tileX, tileY): Mine/chop a tile. Always use explicit tile coordinates from YOUR SITUATION. Auto-moves and selects the correct tool.");
             sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood). Auto-moves first.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
             sb.AppendLine("- Mine and place actions automatically move you into range first - no need for separate move actions!");
+            sb.AppendLine("- Items are AUTO-COLLECTED after every action! Mining/chopping drops items which are automatically added to inventory.");
 
             sb.AppendLine();
             sb.AppendLine("CURRENT STATE:");
             sb.AppendLine($"- Position: tile({agentTileX},{agentTileY}) = pixels({pixelPos.X:F0},{pixelPos.Y:F0})");
             sb.AppendLine($"- Facing: {(NPC.direction > 0 ? "RIGHT (→)" : "LEFT (←)")}");
             sb.AppendLine($"- Health: {NPC.life}/{NPC.lifeMax}");
+
+            // Add hellevator state when active
+            if (_hellevatorMode && _hellevatorColumnLeft.HasValue && _hellevatorCenterPixelX.HasValue)
+            {
+                int leftCol = _hellevatorColumnLeft.Value;
+                int rightCol = leftCol + 1;
+                float centerPx = _hellevatorCenterPixelX.Value;
+                sb.AppendLine($"- Hellevator Shaft: Mining columns X=[{leftCol}, {rightCol}], centered at {centerPx:F0}px");
+                sb.AppendLine($"- Current Depth: Y={agentTileY} (descending from surface)");
+            }
+
             sb.AppendLine();
             sb.AppendLine(DescribeInventory());
             sb.AppendLine();
-            
-            // Use simplified WorldContext for environment info
-            var worldContext = new WorldContext(NPC);
+
+            // Use simplified WorldContext for environment info (with target lock info)
+            var worldContext = new WorldContext(NPC, _commander, _lockedMineTarget, _lockReason);
             sb.Append(worldContext.GetContextSummary());
 
             sb.AppendLine();
             sb.AppendLine("IMPORTANT RULES:");
-            sb.AppendLine("- Use natural language targets when available: mine({\"target\": \"nearest_trees\"}) instead of explicit coords");
-            sb.AppendLine("- Check YOUR SITUATION for available resources nearby");
-            sb.AppendLine("- Mine/place actions auto-move you to targets - NO need for separate move actions!");
-            sb.AppendLine("- Return ONLY ONE action per response using the ReAct format");
-            sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown");
-            sb.AppendLine("- Use 'complete' action when the task is finished");
+            sb.AppendLine("- Always provide explicit tile/pixel coordinates from YOUR SITUATION (tileX/tileY or x/y).");
+            sb.AppendLine("- Do NOT use the \"target\" field (e.g., nearest_trees). It is unsupported and will fail.");
+            sb.AppendLine("- Check YOUR SITUATION for available resources and player positions before acting.");
+            sb.AppendLine("- Mine/place actions auto-move you to targets - NO need for separate move actions once coordinates are chosen.");
+            sb.AppendLine("- Before leaving an area, collect dropped items so nothing valuable is left on the ground.");
+            sb.AppendLine("- Return ONLY ONE action per response using the ReAct format.");
+            sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown.");
+            sb.AppendLine("- Use 'complete' action when the task is finished.");
+            sb.AppendLine();
+            sb.AppendLine("⚠️ TARGET LOCKING RULE:");
+            sb.AppendLine("- If you see '⚠️ CURRENT TARGET' in Nearby Resources, you MUST continue mining that exact target.");
+            sb.AppendLine("- DO NOT switch to different trees/ores of the same type - finish the current target first.");
+            sb.AppendLine("- TREES ARE MULTI-TILE: When chopping a tree, you'll see 'next trunk tile' - mine that tile, then the system shows the next one.");
+            sb.AppendLine("- Continue mining trunk tiles until you see 'Tree fully chopped' - only then can you select a new tree.");
+            sb.AppendLine("- Only after the current target is fully mined should you select a new target.");
+            sb.AppendLine("- Switching mid-task wastes time and leaves incomplete resources.");
+
+            // Add hellevator-specific rules when in hellevator mode
+            if (_hellevatorMode)
+            {
+                sb.AppendLine();
+                sb.AppendLine("⚠️ HELLEVATOR MODE ACTIVE - Special Rules:");
+                sb.AppendLine("- Mine BOTH tiles (left and right) at each Y level before descending to next row");
+                sb.AppendLine("- Work top-to-bottom: Complete current row (Y=N) before moving to next row (Y=N+1)");
+                sb.AppendLine("- Recommended pattern: mine(leftX,Y) → mine(rightX,Y) → mine(leftX,Y+1) → mine(rightX,Y+1) → ...");
+                sb.AppendLine("- Gravity pulls you down automatically through cleared shaft - NO move actions needed!");
+                sb.AppendLine("- System auto-centers you horizontally in the 2-tile shaft - focus only on Y progression");
+                sb.AppendLine("- Plan in small batches: 4-6 mine actions (2-3 rows) before replanning to adapt to obstacles");
+                sb.AppendLine("- Check NEARBY TILES - stop and use 'complete' if you encounter lava, unmineable blocks, or large caverns");
+                sb.AppendLine("- Your X coordinates will be automatically clamped to maintain the 2-wide shaft alignment");
+            }
 
             sb.AppendLine();
             sb.AppendLine("REACT FORMAT:");
@@ -1138,6 +1255,37 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine($"  \"thought\": \"After extensive searching across many cycles, no trees are available in this area. Task is impossible.\",");
             sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"No trees found in the area after extensive searching. Task cannot be completed.\"}}}}");
             sb.AppendLine("}");
+            sb.AppendLine();
+
+            // Example 4: Hellevator digging pattern
+            int hellevatorStartX = agentTileX;
+            int hellevatorStartY = agentTileY + 2;  // Start digging below current position
+            sb.AppendLine($"Example 4: Task is \"dig a hellevator\" starting at current position");
+            sb.AppendLine($"  First action - Mine left tile of first row:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"At tile({agentTileX},{agentTileY}), need to dig vertical 2x2 shaft downward\",");
+            sb.AppendLine($"  \"thought\": \"Start hellevator by mining left tile of first row. System will auto-align to create consistent 2-wide shaft.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX},\"tileY\":{hellevatorStartY}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  Second action - Mine right tile of same row:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Mined tile({hellevatorStartX},{hellevatorStartY}), system centered me in 2-tile shaft\",");
+            sb.AppendLine($"  \"thought\": \"Complete this row by mining the adjacent tile to the right, creating full 2-wide opening\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX + 1},\"tileY\":{hellevatorStartY}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  Third action - Mine left tile of next row down:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Completed row at Y={hellevatorStartY}, gravity is pulling me down into the cleared shaft\",");
+            sb.AppendLine($"  \"thought\": \"Descend by mining left tile of next row. No move action needed - gravity handles vertical movement.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX},\"tileY\":{hellevatorStartY + 1}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  Fourth action - Mine right tile, continue pattern:");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Mining efficiently in 2-wide shaft, descending steadily row by row\",");
+            sb.AppendLine($"  \"thought\": \"Continue alternating left-right-left-right pattern. System keeps me centered, gravity pulls me down.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX + 1},\"tileY\":{hellevatorStartY + 1}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine($"  Continue this pattern (mine both tiles per row, descend) until reaching desired depth or obstacle.");
 
             return sb.ToString();
         }
@@ -1417,7 +1565,7 @@ namespace TerrarAI.Content.NPCs
             float delta = centerX - NPC.Center.X;
             if (Math.Abs(delta) <= 6f)
             {
-                NPC.velocity.X *= 0.5f;
+                MovementHelper.ApplyFriction(NPC, 0.8f);
                 return true;
             }
 
@@ -1425,6 +1573,126 @@ namespace TerrarAI.Content.NPCs
             NPC.velocity.X = adjust;
             UpdateStatus("Centering in hellevator shaft...");
             return false;
+        }
+
+        private void ClearHellevatorState()
+        {
+            _hellevatorMode = false;
+            _hellevatorColumnLeft = null;
+            _hellevatorCenterPixelX = null;
+        }
+
+        private void ClearTargetLock()
+        {
+            if (_lockedMineTarget.HasValue && TerrarAI_Config.Get().EnableVerboseLogging)
+            {
+                Mod.Logger.Info($"[Target Lock] Cleared lock on {_lockReason ?? "resource"} at tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+            }
+
+            _lockedMineTarget = null;
+            _lockReason = null;
+            _isLockedTargetTree = false;
+        }
+
+        /// <summary>
+        /// Checks if the locked target should remain locked or be auto-cleared.
+        /// For trees, only clears when entire tree is gone.
+        /// For single tiles, clears when that tile is gone.
+        /// </summary>
+        private bool ShouldMaintainLock()
+        {
+            if (!_lockedMineTarget.HasValue)
+            {
+                return false;
+            }
+
+            if (_isLockedTargetTree)
+            {
+                // For trees, check if the tree still exists
+                bool treeExists = TreeHelper.DoesTreeExist(_lockedMineTarget.Value);
+
+                if (!treeExists && TerrarAI_Config.Get().EnableVerboseLogging)
+                {
+                    Mod.Logger.Info($"[Target Lock] Tree at base tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y}) fully chopped - auto-clearing lock");
+                }
+
+                return treeExists;
+            }
+            else
+            {
+                // For single-tile resources, check if tile still exists
+                var tile = Framing.GetTileSafely(_lockedMineTarget.Value.X, _lockedMineTarget.Value.Y);
+                bool tileExists = tile.HasTile;
+
+                if (!tileExists && TerrarAI_Config.Get().EnableVerboseLogging)
+                {
+                    Mod.Logger.Info($"[Target Lock] Resource tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y}) destroyed - auto-clearing lock");
+                }
+
+                return tileExists;
+            }
+        }
+
+        private void CollectNearbyItems()
+        {
+            if (_commander == null)
+                return;
+
+            const float collectionRadius = 64f; // ~4 tiles
+
+            int itemsCollected = 0;
+            var collectedItems = new List<string>();
+
+            for (int i = 0; i < Main.maxItems; i++)
+            {
+                Item item = Main.item[i];
+                if (item == null || !item.active || item.IsAir)
+                    continue;
+
+                float distance = Vector2.Distance(NPC.Center, item.position);
+                if (distance <= collectionRadius)
+                {
+                    // Record what we're collecting
+                    collectedItems.Add($"{item.Name} x{item.stack}");
+
+                    // Add item to commander's inventory
+                    _commander.GetItem(_commander.whoAmI, item, GetItemSettings.LootAllSettings);
+
+                    // Remove item from world
+                    item.active = false;
+
+                    // Sync in multiplayer
+                    if (Main.netMode == NetmodeID.Server)
+                    {
+                        NetMessage.SendData(MessageID.SyncItem, -1, -1, null, i);
+                    }
+
+                    itemsCollected++;
+                }
+            }
+
+            // Log collection if verbose logging enabled
+            if (itemsCollected > 0 && TerrarAI_Config.Get().EnableVerboseLogging)
+            {
+                var itemsList = string.Join(", ", collectedItems);
+                TerrarAI.Instance.Logger.Info($"[Agent {NPC.whoAmI}] Auto-collected {itemsCollected} items: {itemsList}");
+            }
+        }
+
+        private void ScheduleAutoCollectBurst()
+        {
+            _autoCollectTicksRemaining = Math.Max(_autoCollectTicksRemaining, 120);
+        }
+
+        private void TickAutoCollect()
+        {
+            if (_autoCollectTicksRemaining <= 0)
+            {
+                return;
+            }
+
+            _autoCollectTicksRemaining--;
+            CollectNearbyItems();
         }
 
         private string DescribeNearbyResources()

@@ -12,7 +12,7 @@ namespace TerrarAI.Content.Actions
     public sealed class MineAction : TileTargetAction
     {
         private enum Phase { CheckingRange, MovingToTarget, Mining }
-        
+
         private Phase _phase = Phase.CheckingRange;
         private MoveAction? _moveAction;
         private int _damageAccumulated;
@@ -41,7 +41,7 @@ namespace TerrarAI.Content.Actions
             _initialized = false;
             _slowMiningToggle = false;
         }
-        
+
         protected override void OnCancel()
         {
             base.OnCancel();
@@ -60,13 +60,13 @@ namespace TerrarAI.Content.Actions
             {
                 case Phase.CheckingRange:
                     return HandleCheckingRange(context);
-                    
+
                 case Phase.MovingToTarget:
                     return HandleMovingToTarget(context);
-                    
+
                 case Phase.Mining:
                     return HandleMining(context);
-                    
+
                 default:
                     return AgentActionResult.Failure("Invalid phase");
             }
@@ -129,7 +129,7 @@ namespace TerrarAI.Content.Actions
                 if (velocityX > 0.5f || velocityY > 0.5f)
                 {
                     // Agent still has too much velocity - apply brakes and wait
-                    context.Agent.velocity.X *= 0.3f;
+                    MovementHelper.ApplyFriction(context.Agent, 1.0f);
                     context.Agent.velocity.Y *= 0.3f;
                     return AgentActionResult.Pending($"Stabilizing position before mining... (velocity: {velocityX:F1}, {velocityY:F1})");
                 }
@@ -185,7 +185,7 @@ namespace TerrarAI.Content.Actions
             }
 
             // RE-ZERO VELOCITY each tick to combat any drift
-            context.Agent.velocity.X *= 0.5f;
+            MovementHelper.ApplyFriction(context.Agent, 0.8f);
             context.Agent.velocity.Y *= 0.5f;
 
             // Check if tile still exists
@@ -209,7 +209,7 @@ namespace TerrarAI.Content.Actions
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)
             {
-                WorldGen.KillTile(Tile.X, Tile.Y, false, false, true);
+                WorldGen.KillTile(Tile.X, Tile.Y, false, false, false);
 
                 // Sync tile change in multiplayer
                 if (Main.netMode == NetmodeID.Server)
@@ -269,30 +269,12 @@ namespace TerrarAI.Content.Actions
 
         public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator, WorldContext? worldContext = null, NPC? agent = null)
         {
-            // Check for natural language "target" parameter
+            // Reject legacy natural-language "target" parameter outright
             if (parameters.TryGetProperty("target", out var targetElement) && targetElement.ValueKind == JsonValueKind.String)
             {
-                var target = targetElement.GetString();
-                if (target != null && worldContext != null && agent != null)
-                {
-                    // Handle "nearest_X" pattern
-                    if (target.StartsWith("nearest_", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var resourceType = target.Substring("nearest_".Length);
-                        var nearestTile = worldContext.FindNearest(resourceType, agent.Center);
-                        
-                        if (nearestTile.HasValue)
-                        {
-                            return new MineAction(nearestTile.Value);
-                        }
-                        else
-                        {
-                            throw new ActionParserException($"Could not find any {resourceType} nearby");
-                        }
-                    }
-                }
+                return new FailureAction("Mine actions now require explicit tileX/tileY coordinates. Natural-language targets like \"nearest_trees\" are no longer supported.");
             }
-            
+
             // Standard tile coordinate parsing
             var tileX = ActionParameterReader.ReadInt(parameters, "tileX");
             var tileY = ActionParameterReader.ReadInt(parameters, "tileY");

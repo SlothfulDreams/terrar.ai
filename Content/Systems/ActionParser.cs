@@ -23,7 +23,7 @@ namespace TerrarAI.Content.Systems
             validator.EnsureServerOrThrow();
 
             // Create WorldContext for natural language parameter support
-            var worldContext = new WorldContext(agent);
+            var worldContext = new WorldContext(agent, commander);
 
             using var document = JsonDocument.Parse(json);
 

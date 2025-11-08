@@ -14,7 +14,7 @@ namespace TerrarAI.Content.Actions
         private readonly float _speed;
         private MovementHelper.MovementState _movementState;
 
-        public MoveAction(Vector2 targetPixels, float tolerance = 32f, float speed = 4f)
+        public MoveAction(Vector2 targetPixels, float tolerance = 12f, float speed = 3f)
         {
             _targetPixels = targetPixels;
             _tolerance = tolerance;
@@ -60,11 +60,13 @@ namespace TerrarAI.Content.Actions
 
             float tolerance = parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("tolerance", out var tol) && tol.ValueKind == JsonValueKind.Number
                 ? (float)tol.GetDouble()
-                : 32f;
+                : 12f;
 
             float speed = parameters.ValueKind == JsonValueKind.Object && parameters.TryGetProperty("speed", out var spd) && spd.ValueKind == JsonValueKind.Number
-                ? Math.Clamp((float)spd.GetDouble(), 1f, 10f)
-                : 4f;
+                ? Math.Clamp((float)spd.GetDouble(), 1f, 6f)
+                : 3f;
+
+            tolerance = Math.Clamp(tolerance, 4f, 64f);
 
             return new MoveAction(clamped, tolerance, speed);
         }

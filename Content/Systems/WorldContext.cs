@@ -11,12 +11,20 @@ namespace TerrarAI.Content.Systems
     public class WorldContext
     {
         private readonly NPC _agent;
+        private readonly Player? _commander;
+        private readonly Point? _lockedMineTarget;
+        private readonly string? _lockReason;
         private const int SCAN_RADIUS = 25; // 25 tiles = ~400 pixels
+        private const int RESOURCE_SCAN_RADIUS = 60; // Extended search for meaningful resources
         private const float MAX_REACH = 80f; // 5 tiles
+        private const float ITEM_STABLE_SPEED_THRESHOLD = 0.6f; // px per frame
 
-        public WorldContext(NPC agent)
+        public WorldContext(NPC agent, Player? commander = null, Point? lockedMineTarget = null, string? lockReason = null)
         {
             _agent = agent;
+            _commander = commander;
+            _lockedMineTarget = lockedMineTarget;
+            _lockReason = lockReason;
         }
 
         public string GetContextSummary()
@@ -26,7 +34,9 @@ namespace TerrarAI.Content.Systems
             sb.AppendLine($"Position: {GetPositionString()}");
             sb.AppendLine($"Nearby Resources: {GetResourceSummary()}");
             sb.AppendLine($"Nearby Blocks: {GetBlockSummary()}");
-            sb.AppendLine($"Nearby Players: {GetPlayerNames()}");
+            sb.AppendLine($"Nearby Items: {GetItemsSummary()}");
+            sb.AppendLine($"Commander Target: {GetCommanderSummary()}");
+            sb.AppendLine($"Nearby Players: {GetNearbyPlayersSummary()}");
             return sb.ToString();
         }
 
@@ -45,20 +55,111 @@ namespace TerrarAI.Content.Systems
                 return "none";
             }
 
-            var grouped = resources.GroupBy(r => r.Type)
+            // If there's a locked target, show it prominently
+            if (_lockedMineTarget.HasValue)
+            {
+                // Special handling for trees - show next trunk tile to mine
+                if (_lockReason == "tree" && TreeHelper.IsTreeTile(_lockedMineTarget.Value))
+                {
+                    var nextTile = TreeHelper.GetNextTreeTileToMine(_lockedMineTarget.Value);
+                    if (nextTile.HasValue)
+                    {
+                        float tileCenterX = nextTile.Value.X * 16f + 8f;
+                        float tileCenterY = nextTile.Value.Y * 16f + 8f;
+                        float distance = Vector2.Distance(_agent.Center, new Vector2(tileCenterX, tileCenterY));
+                        bool reachable = distance <= MAX_REACH;
+                        string reachTag = reachable ? "reachable" : $"{distance:F0}px";
+
+                        string treeStatus = TreeHelper.GetTreeStatus(_lockedMineTarget.Value);
+                        string lockedInfo = $"⚠️ CURRENT TARGET (tree) next trunk tile({nextTile.Value.X},{nextTile.Value.Y}) [{reachTag}] - {treeStatus} - FINISH THIS TREE FIRST";
+
+                        // Filter out other trees to prevent distraction
+                        var otherResources = resources.Where(r => r.Type != "trees").ToList();
+
+                        if (otherResources.Count == 0)
+                        {
+                            return lockedInfo;
+                        }
+
+                        // Show locked tree first, then other resource types
+                        var grouped = otherResources.GroupBy(r => r.Type)
+                                                   .OrderBy(g => g.Min(r => r.Distance))
+                                                   .Take(5);
+
+                        var summaries = new List<string> { lockedInfo };
+                        foreach (var group in grouped)
+                        {
+                            int count = group.Count();
+                            var nearest = group.OrderBy(r => r.Distance).First();
+                            string reachTagOther = nearest.Reachable ? "reachable" : $"{nearest.Distance:F0}px";
+                            summaries.Add($"{count} {group.Key} → tile({nearest.TileX},{nearest.TileY}) [{reachTagOther}]");
+                        }
+
+                        return string.Join("; ", summaries);
+                    }
+                }
+
+                // Non-tree locked resource (ore, etc.)
+                var lockedResource = resources.FirstOrDefault(r => r.TileX == _lockedMineTarget.Value.X && r.TileY == _lockedMineTarget.Value.Y);
+                if (lockedResource != null)
+                {
+                    string reachTag = lockedResource.Reachable ? "reachable" : $"{lockedResource.Distance:F0}px";
+                    string lockedInfo = $"⚠️ CURRENT TARGET ({_lockReason ?? lockedResource.Type}) tile({lockedResource.TileX},{lockedResource.TileY}) [{reachTag}] - FINISH THIS FIRST";
+
+                    // Filter out other resources of the same type to prevent distraction
+                    var otherResources = resources.Where(r => r.Type != lockedResource.Type || (r.TileX == lockedResource.TileX && r.TileY == lockedResource.TileY)).ToList();
+
+                    if (otherResources.Count == 0 || otherResources.All(r => r.TileX == lockedResource.TileX && r.TileY == lockedResource.TileY))
+                    {
+                        return lockedInfo;
+                    }
+
+                    // Show locked target first, then other resource types
+                    var grouped = otherResources.Where(r => r.Type != lockedResource.Type)
+                                               .GroupBy(r => r.Type)
+                                               .OrderBy(g => g.Min(r => r.Distance))
+                                               .Take(5);
+
+                    var summaries = new List<string> { lockedInfo };
+                    foreach (var group in grouped)
+                    {
+                        int count = group.Count();
+                        var nearest = group.OrderBy(r => r.Distance).First();
+                        string reachTagOther = nearest.Reachable ? "reachable" : $"{nearest.Distance:F0}px";
+                        summaries.Add($"{count} {group.Key} → tile({nearest.TileX},{nearest.TileY}) [{reachTagOther}]");
+                    }
+
+                    return string.Join("; ", summaries);
+                }
+            }
+
+            // No lock - show resources normally
+            var groupedNormal = resources.GroupBy(r => r.Type)
                                   .OrderBy(g => g.Min(r => r.Distance))
                                   .Take(8);
 
-            var summaries = new List<string>();
-            foreach (var group in grouped)
+            var summariesNormal = new List<string>();
+            foreach (var group in groupedNormal)
             {
                 int count = group.Count();
-                int reachable = group.Count(r => r.Distance <= MAX_REACH);
+                int reachable = group.Count(r => r.Reachable);
                 string suffix = reachable > 0 ? $" ({reachable} reachable)" : "";
-                summaries.Add($"{count} {group.Key}{suffix}");
+
+                var nearest = group.OrderBy(r => r.Distance)
+                                   .Take(3)
+                                   .Select(r =>
+                                   {
+                                       string reachTag = r.Reachable ? "reachable" : $"{r.Distance:F0}px";
+                                       return $"tile({r.TileX},{r.TileY}) [{reachTag}]";
+                                   });
+
+                string nearestInfo = string.Join(", ", nearest);
+                summariesNormal.Add(nearestInfo.Length > 0
+                    ? $"{count} {group.Key}{suffix} → {nearestInfo}"
+                    : $"{count} {group.Key}{suffix}");
             }
 
-            return string.Join(", ", summaries);
+            return string.Join(", ", summariesNormal);
         }
 
         private string GetBlockSummary()
@@ -76,9 +177,42 @@ namespace TerrarAI.Content.Systems
             return string.Join(", ", sorted);
         }
 
-        private string GetPlayerNames()
+        private string GetItemsSummary()
         {
-            var players = new List<string>();
+            var items = ScanItems();
+            if (items.Count == 0)
+            {
+                return "none (auto-collected)";
+            }
+
+            // Group by item name and sum stacks
+            var grouped = items.GroupBy(i => i.Name)
+                              .Select(g => new
+                              {
+                                  Name = g.Key,
+                                  TotalStack = g.Sum(i => i.Stack),
+                                  MinDistance = g.Min(i => i.Distance)
+                              })
+                              .OrderBy(g => g.MinDistance)
+                              .Take(8);
+
+            var summaries = grouped.Select(g => $"{g.Name} x{g.TotalStack} ({g.MinDistance:F0}px)");
+            return string.Join(", ", summaries);
+        }
+
+        private string GetCommanderSummary()
+        {
+            if (_commander == null || !_commander.active || _commander.dead)
+            {
+                return "none (no active commander)";
+            }
+
+            return $"{_commander.name} {FormatRelativePosition(_commander.Center)}";
+        }
+
+        private string GetNearbyPlayersSummary()
+        {
+            var summaries = new List<string>();
             foreach (var player in Main.player)
             {
                 if (player == null || !player.active || player.dead)
@@ -86,14 +220,68 @@ namespace TerrarAI.Content.Systems
                     continue;
                 }
 
+                if (_commander != null && player.whoAmI == _commander.whoAmI)
+                {
+                    continue;
+                }
+
                 float distance = Vector2.Distance(_agent.Center, player.Center);
                 if (distance <= SCAN_RADIUS * 16f)
                 {
-                    players.Add(player.name);
+                    summaries.Add($"{player.name} {FormatRelativePosition(player.Center)}");
                 }
             }
 
-            return players.Count > 0 ? string.Join(", ", players) : "none";
+            return summaries.Count > 0 ? string.Join("; ", summaries) : "none within scan radius";
+        }
+
+        private List<ItemInfo> ScanItems()
+        {
+            var items = new List<ItemInfo>();
+
+            for (int i = 0; i < Main.maxItems; i++)
+            {
+                Item item = Main.item[i];
+                if (item == null || !item.active || item.IsAir)
+                {
+                    continue;
+                }
+
+                if (!IsItemStable(item))
+                {
+                    continue;
+                }
+
+                float distance = Vector2.Distance(_agent.Center, item.position);
+
+                // Only show items within scan radius
+                if (distance <= SCAN_RADIUS * 16f)
+                {
+                    items.Add(new ItemInfo
+                    {
+                        Name = item.Name,
+                        Stack = item.stack,
+                        Distance = distance
+                    });
+                }
+            }
+
+            return items;
+        }
+
+        private bool IsItemStable(Item item)
+        {
+            if (item.noGrabDelay > 0)
+            {
+                return false;
+            }
+
+            if (item.velocity.LengthSquared() > ITEM_STABLE_SPEED_THRESHOLD * ITEM_STABLE_SPEED_THRESHOLD)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private List<ResourceInfo> ScanResources()
@@ -102,9 +290,9 @@ namespace TerrarAI.Content.Systems
             int agentTileX = (int)(_agent.Center.X / 16f);
             int agentTileY = (int)(_agent.Center.Y / 16f);
 
-            for (int y = -SCAN_RADIUS; y <= SCAN_RADIUS; y += 2)
+            for (int y = -RESOURCE_SCAN_RADIUS; y <= RESOURCE_SCAN_RADIUS; y += 2)
             {
-                for (int x = -SCAN_RADIUS; x <= SCAN_RADIUS; x += 2)
+                for (int x = -RESOURCE_SCAN_RADIUS; x <= RESOURCE_SCAN_RADIUS; x += 2)
                 {
                     int checkX = agentTileX + x;
                     int checkY = agentTileY + y;
@@ -115,8 +303,7 @@ namespace TerrarAI.Content.Systems
                         continue;
                     }
 
-                    var tileName = TileID.Search.GetName(tile.TileType);
-                    if (!IsResourceTile(tileName))
+                    if (!TryGetResourceType(tile.TileType, out string resourceType))
                     {
                         continue;
                     }
@@ -127,10 +314,11 @@ namespace TerrarAI.Content.Systems
 
                     resources.Add(new ResourceInfo
                     {
-                        Type = SimplifyResourceName(tileName),
+                        Type = resourceType,
                         TileX = checkX,
                         TileY = checkY,
-                        Distance = distance
+                        Distance = distance,
+                        Reachable = distance <= MAX_REACH
                     });
                 }
             }
@@ -171,63 +359,22 @@ namespace TerrarAI.Content.Systems
             return blocks;
         }
 
-        private bool IsResourceTile(string tileName)
+        private bool TryGetResourceType(ushort tileType, out string resourceType)
         {
-            return tileName.Contains("Ore") ||
-                   tileName.Contains("Tree") ||
-                   tileName.Contains("Gem") ||
-                   tileName.Contains("Crystal") ||
-                   tileName.Contains("Wood") ||
-                   tileName.Contains("Gold") ||
-                   tileName.Contains("Silver") ||
-                   tileName.Contains("Copper") ||
-                   tileName.Contains("Iron") ||
-                   tileName.Contains("Platinum") ||
-                   tileName.Contains("Tungsten") ||
-                   tileName.Contains("Lead") ||
-                   tileName.Contains("Tin");
-        }
-
-        private string SimplifyResourceName(string tileName)
-        {
-            if (tileName.Contains("Tree"))
+            if (TileID.Sets.IsATreeTrunk[tileType])
             {
-                return "trees";
-            }
-            if (tileName.Contains("Copper"))
-            {
-                return "copper_ore";
-            }
-            if (tileName.Contains("Iron"))
-            {
-                return "iron_ore";
-            }
-            if (tileName.Contains("Gold"))
-            {
-                return "gold_ore";
-            }
-            if (tileName.Contains("Silver"))
-            {
-                return "silver_ore";
-            }
-            if (tileName.Contains("Platinum"))
-            {
-                return "platinum_ore";
-            }
-            if (tileName.Contains("Tungsten"))
-            {
-                return "tungsten_ore";
-            }
-            if (tileName.Contains("Lead"))
-            {
-                return "lead_ore";
-            }
-            if (tileName.Contains("Tin"))
-            {
-                return "tin_ore";
+                resourceType = "trees";
+                return true;
             }
 
-            return tileName.ToLower().Replace(" ", "_");
+            if (Main.tileOreFinderPriority[tileType] > 0)
+            {
+                resourceType = TileID.Search.GetName(tileType).ToLower().Replace(" ", "_");
+                return true;
+            }
+
+            resourceType = string.Empty;
+            return false;
         }
 
         private string SimplifyBlockName(string tileName)
@@ -235,19 +382,30 @@ namespace TerrarAI.Content.Systems
             return tileName.ToLower().Replace(" ", "_");
         }
 
-        public Point? FindNearest(string resourceType, Vector2 fromPosition)
+        private string FormatRelativePosition(Vector2 target)
         {
-            var resources = ScanResources();
-            var matching = resources.Where(r => r.Type.Equals(resourceType, StringComparison.OrdinalIgnoreCase))
-                                   .OrderBy(r => r.Distance)
-                                   .FirstOrDefault();
+            int tileX = (int)(target.X / 16f);
+            int tileY = (int)(target.Y / 16f);
+            float distance = Vector2.Distance(_agent.Center, target);
+            var delta = target - _agent.Center;
+            string direction = DescribeDirection(delta);
+            return $"tile({tileX},{tileY}) pixels({target.X:F0},{target.Y:F0}) [{distance:F0}px, {direction}]";
+        }
 
-            if (matching != null)
-            {
-                return new Point(matching.TileX, matching.TileY);
-            }
+        private string DescribeDirection(Vector2 delta)
+        {
+            int tilesX = (int)Math.Round(delta.X / 16f);
+            int tilesY = (int)Math.Round(delta.Y / 16f);
 
-            return null;
+            string horizontal = tilesX == 0
+                ? "same X"
+                : $"{Math.Abs(tilesX)} tile{(Math.Abs(tilesX) == 1 ? "" : "s")} {(tilesX > 0 ? "right" : "left")}";
+
+            string vertical = tilesY == 0
+                ? "same Y"
+                : $"{Math.Abs(tilesY)} tile{(Math.Abs(tilesY) == 1 ? "" : "s")} {(tilesY > 0 ? "below" : "above")}";
+
+            return $"{horizontal}, {vertical}";
         }
 
         private class ResourceInfo
@@ -256,7 +414,14 @@ namespace TerrarAI.Content.Systems
             public int TileX { get; set; }
             public int TileY { get; set; }
             public float Distance { get; set; }
+            public bool Reachable { get; set; }
+        }
+
+        private class ItemInfo
+        {
+            public string Name { get; set; } = string.Empty;
+            public int Stack { get; set; }
+            public float Distance { get; set; }
         }
     }
 }
-
