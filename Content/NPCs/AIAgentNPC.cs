@@ -75,9 +75,10 @@ namespace TerrarAI.Content.NPCs
             NPC.dontTakeDamage = true;
             NPC.dontTakeDamageFromHostiles = true;
             NPC.lifeMax = 250;
+            NPC.friendly = true;
             NPC.aiStyle = NPCAIStyleID.Fighter;
-            AIType = NPCID.UndeadViking;
-            AnimationType = NPCID.UndeadViking;
+            AIType = NPCID.Zombie; // Use Zombie AI reference (doesn't flee during daytime)
+            AnimationType = NPCID.Zombie;
             NPC.noGravity = false;
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
@@ -98,6 +99,11 @@ namespace TerrarAI.Content.NPCs
         public override bool PreAI()
         {
             if (State == AgentState.Idle)
+            {
+                NPC.aiStyle = NPCAIStyleID.Fighter;
+                AssignFollowTarget();
+            }
+            else if (State == AgentState.Executing && _currentAction is MoveAction)
             {
                 NPC.aiStyle = NPCAIStyleID.Fighter;
                 AssignFollowTarget();
@@ -433,24 +439,13 @@ namespace TerrarAI.Content.NPCs
                     break;
                 case AgentActionStatus.Failure:
                     var failureReason = result.Message ?? "Action failed.";
-                    var actionName = _currentAction.Name;
                     _currentAction.Reset();
                     _currentAction = null;
-
-                    // Try partial replanning: skip failed action and continue if failure is recoverable
-                    if (IsRecoverableFailure(failureReason) && _actionQueue.Count > 0)
-                    {
-                        SendChatMessage($"{actionName} failed: {failureReason}. Skipping and continuing...", Color.Yellow);
-                        UpdateStatus($"Skipped failed action, continuing...");
-                        break;
-                    }
-
-                    // Critical failure: full replan
                     _actionQueue.Clear();
-                    _replanContext = $"{actionName} failed: {failureReason}";
+
+                    _replanContext = failureReason;
                     State = AgentState.Replanning;
                     UpdateStatus("Replanning due to failure...", forceNetUpdate: true);
-                    SendChatMessage($"Critical failure, replanning...", Color.OrangeRed);
                     BeginPlanning();
                     break;
             }
@@ -465,39 +460,6 @@ namespace TerrarAI.Content.NPCs
             }
 
             UpdateStatus($"Queued {_actionQueue.Count} actions.");
-        }
-
-        private bool IsRecoverableFailure(string failureReason)
-        {
-            if (string.IsNullOrWhiteSpace(failureReason))
-            {
-                return false;
-            }
-
-            var reason = failureReason.ToLowerInvariant();
-
-            // Recoverable: minor issues that don't affect subsequent actions
-            if (reason.Contains("already") || 
-                reason.Contains("not found") ||
-                reason.Contains("no tile") ||
-                reason.Contains("tile already") ||
-                reason.Contains("cannot place"))
-            {
-                return true;
-            }
-
-            // Critical: issues that likely affect the entire plan
-            if (reason.Contains("out of range") ||
-                reason.Contains("too far") ||
-                reason.Contains("unreachable") ||
-                reason.Contains("blocked") ||
-                reason.Contains("timeout"))
-            {
-                return false;
-            }
-
-            // Default: treat unknown failures as recoverable to avoid excessive replanning
-            return true;
         }
 
         private void BeginPlanning()

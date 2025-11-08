@@ -7,17 +7,17 @@ namespace TerrarAI.Content.Actions
     public sealed class MoveAction : AgentAction
     {
         private readonly Vector2 _targetPixels;
-        private readonly float _speed;
         private readonly float _tolerance;
 
-        public MoveAction(Vector2 targetPixels, float speed = 3.5f, float tolerance = 12f)
+        public MoveAction(Vector2 targetPixels, float tolerance = 32f)
         {
             _targetPixels = targetPixels;
-            _speed = speed;
             _tolerance = tolerance;
         }
 
         public override string Name => "move";
+
+        public Vector2 TargetPosition => _targetPixels;
 
         public override AgentActionResult Execute(AgentActionContext context)
         {
@@ -33,26 +33,13 @@ namespace TerrarAI.Content.Actions
             if (distanceSq <= _tolerance * _tolerance)
             {
                 npc.velocity *= 0.5f;
-                npc.Center = _targetPixels;
-                return AgentActionResult.Success($"Arrived near {_targetPixels}");
+                return AgentActionResult.Success($"Arrived at {_targetPixels}");
             }
 
-            var desiredVelocity = SafeNormalize(delta) * _speed;
-            npc.velocity = Vector2.Lerp(npc.velocity, desiredVelocity, 0.35f);
-            npc.direction = desiredVelocity.X >= 0 ? 1 : -1;
+            npc.direction = delta.X >= 0 ? 1 : -1;
+            npc.directionY = delta.Y >= 0 ? 1 : -1;
 
             return AgentActionResult.Pending($"Moving to {_targetPixels}");
-        }
-
-        private static Vector2 SafeNormalize(Vector2 vector)
-        {
-            if (vector == Vector2.Zero)
-            {
-                return Vector2.Zero;
-            }
-
-            vector.Normalize();
-            return vector;
         }
     }
 }
