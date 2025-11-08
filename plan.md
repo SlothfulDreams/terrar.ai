@@ -6,10 +6,12 @@ Players type natural language commands → AI agents execute tasks in-game
 .
 
 ## CURRENT STATE
-- Phase 1 foundations (config surface, xAI client, `/testxai`, command keybind, server-only helpers) are live in source.
-- Phase 2 action system (AgentAction hierarchy, parser + validator, move/mine/place/say behaviors) is implemented and compiling.
-- Phase 3 agent NPC + commands have their first pass in code: `/spawnagent` spawns the helper, `/agentcmd` lets the host send instructions, and the NPC now plans/executing via xAI asynchronously with the custom sprite sheet installed.
-- Phase 4 command UI is playable: pressing `J` opens `CommandPanelUI`, `CommandUISystem` draws it, and `CommandUIPlayer` handles nearest-agent dispatch with validation messaging. UI interactions now emit structured log lines to `tModLoader/Logs` for easier troubleshooting.
+- **Phase 1 ✅ COMPLETE**: Config system, xAI client, `/testxai` command, server-only helpers all implemented and tested.
+- **Phase 2 ✅ COMPLETE**: AgentAction hierarchy, parser + validator, move/mine/place/say behaviors fully implemented and compiling.
+- **Phase 3 ✅ COMPLETE**: AIAgentNPC with full state machine, `/spawnagent` and `/agentcmd` commands working. Agents now render as full player character clones with all animations (skin, hair, armor, accessories). Planning phase includes verbose logging, HTTP timeouts, planning timeouts, and chat notifications for visibility.
+- **Phase 4 ⚠️ REMOVED**: Command UI (CommandPanelUI, CommandUISystem, CommandUIPlayer) was removed in favor of simpler chat-only interface. All commands now use standard Terraria chat (`T` or `Enter` key).
+- **Enhancements**: Added comprehensive debugging features including verbose logging toggle, configurable timeouts (HTTP and planning), planning progress notifications in chat, and improved error handling with timeout detection.
+- **Rendering System**: Agents use Terraria's native `Main.PlayerRenderer.DrawPlayer()` for full player character rendering including all animations (walking, standing, mining, jumping, etc.).
 - Remaining phases (advanced prompting, coordination, polish, etc.) are still outstanding.
 
 ---
@@ -185,56 +187,7 @@ Format: {"actions": [{"type": "action", "params": {...}}]}
 
 ---
 
-## PHASE 4: COMMAND UI
-
-### Goal
-Build user interface for commanding agents.
-
-### Tasks
-1. Create CommandPanelUI class (extends UIState)
-2. Add UIPanel, UIText, UITextPanel elements
-3. Implement text input handling
-4. Add submit button with OnLeftClick event
-5. Build CommandUISystem (extends ModSystem)
-6. Implement UpdateUI() and ModifyInterfaceLayers()
-7. Create CommandUIPlayer (extends ModPlayer)
-8. Implement ProcessTriggers() to handle keybind
-9. Add FindNearestAgent() method (searches Main.npc array)
-10. Connect UI submit to agent.ReceiveCommand()
-
-### File Structure
-```
-Content/
-  UI/
-    CommandPanelUI.cs
-  Systems/
-    CommandUISystem.cs
-Common/
-  Players/
-    CommandUIPlayer.cs
-```
-
-### UI Flow
-```
-1. Player presses J key
-2. CommandUIPlayer.ProcessTriggers() calls CommandUISystem.ToggleUI()
-3. UI panel appears with input field
-4. Player types command, clicks submit
-5. FindNearestAgent() searches for AIAgentNPC within range
-6. Calls agent.ReceiveCommand(command)
-7. UI closes
-```
-
-### Success Criteria
-- Press J key, UI panel appears
-- Type command in input field
-- Click submit, nearest agent receives command
-- UI displays "No agent nearby" if none in range
-- UI closes after command sent
-
----
-
-## PHASE 5: ADVANCED PROMPTING
+## PHASE 4: ADVANCED PROMPTING
 
 ### Goal
 Improve xAI context awareness and response quality.
@@ -291,7 +244,7 @@ AgentMemory maintains:
 
 ---
 
-## PHASE 6: MULTI-AGENT COORDINATION
+## PHASE 5: MULTI-AGENT COORDINATION
 
 ### Goal
 Enable multiple agents to work together without conflicts.
@@ -352,7 +305,7 @@ class BuildTask:
 
 ---
 
-## PHASE 7: POLISH & ERROR HANDLING
+## PHASE 6: POLISH & ERROR HANDLING
 
 ### Goal
 Make mod stable and user-friendly.
@@ -399,7 +352,7 @@ AIAgentNPC.HandleExecutingState():
 
 ---
 
-## PHASE 8: ADVANCED FEATURES (OPTIONAL)
+## PHASE 7: ADVANCED FEATURES (OPTIONAL)
 
 ### Goal
 Extend capabilities beyond basic implementation.
@@ -486,40 +439,37 @@ State transitions happen in same frame, no delays
 
 ```
 TerrarAI/
-├── TerrarAI.cs                    # Main mod, keybind registration
-├── TerrarAI_Config.cs             # User settings (API key, model)
+├── TerrarAI.cs                    # Main mod class
+├── TerrarAI_Config.cs             # User settings (API key, model, timeouts, verbose logging)
 ├── Content/
 │   ├── NPCs/
 │   │   ├── AgentState.cs          # State enum
-│   │   ├── AIAgentNPC.cs          # Main agent class
-│   │   └── AIAgentNPC.png         # 20x30 sprite sheet (19 frames, horizontal)
+│   │   ├── AIAgentNPC.cs          # Main agent class with player rendering
+│   │   └── AIAgentNPC.png         # Sprite sheet (unused - agents render as player clones)
 │   ├── Actions/
 │   │   ├── AgentAction.cs         # Abstract base
 │   │   ├── MoveAction.cs          # Navigation
 │   │   ├── MineAction.cs          # Break tiles
 │   │   ├── PlaceBlockAction.cs    # Place tiles
 │   │   ├── SayAction.cs           # Chat messages
-│   │   ├── CombatAction.cs        # Phase 8
-│   │   └── CraftAction.cs         # Phase 8
-│   ├── UI/
-│   │   ├── CommandPanelUI.cs      # Command input panel
-│   │   └── AgentStatusUI.cs       # Agent list display
+│   │   ├── CombatAction.cs        # Phase 7
+│   │   └── CraftAction.cs         # Phase 7
 │   └── Systems/
 │       ├── XAIClient.cs           # xAI API client
 │       ├── ActionParser.cs        # JSON to Action parser
 │       ├── ActionValidator.cs     # Input sanitization/clamping
-│       ├── AgentMemory.cs         # Conversation history
-│       ├── PromptBuilder.cs       # Context assembly
-│       ├── CommandUISystem.cs     # UI lifecycle manager
-│       ├── AgentCoordinator.cs    # Multi-agent manager
-│       └── BuildTask.cs           # Shared construction task
+│       ├── AgentMemory.cs         # Conversation history (Phase 4)
+│       ├── PromptBuilder.cs       # Context assembly (Phase 4)
+│       ├── AgentCoordinator.cs    # Multi-agent manager (Phase 5)
+│       └── BuildTask.cs           # Shared construction task (Phase 5)
 ├── Common/
-    ├── Commands/
-    │   ├── SpawnAgentCommand.cs   # /spawnagent
-    │   ├── TestAPICommand.cs      # /testxai
-    │   └── MultiAgentBuildCommand.cs  # /agentbuild
-    └── Players/
-        └── CommandUIPlayer.cs     # Keybind handler
+│   ├── Commands/
+│   │   ├── SpawnAgentCommand.cs   # /spawnagent
+│   │   ├── AgentCommand.cs        # /agentcmd
+│   │   ├── TestAPICommand.cs      # /testxai
+│   │   └── MultiAgentBuildCommand.cs  # /agentbuild (Phase 5)
+│   └── Helpers/
+│       └── ServerAuthority.cs     # Server-side validation helpers
 └── Tests/
     └── TerrarAI.Tests/            # xUnit/NUnit project with mocks
 ```
@@ -545,30 +495,27 @@ Beyond in-game QA, add a lightweight `Tests/TerrarAI.Tests` project (xUnit/NUnit
 
 ### Phase 3 Tests
 - Spawn agent with /spawnagent
-- Send command via ReceiveCommand()
+- Send command via /agentcmd
 - Verify state transitions (watch state display)
 - Test simple commands: "say hello", "move to 1000 500"
+- Verify agent renders as player character clone
+- Check planning timeout notifications appear in chat
+- Test verbose logging toggle
 
 ### Phase 4 Tests
-- Press J key, UI appears
-- Type command, verify nearest agent gets it
-- Test with no agents (error message)
-- Test with multiple agents (closest selected)
-
-### Phase 5 Tests
 - Command "describe surroundings", verify context used
 - Send impossible command, verify replanning
 - Test memory with follow-up commands
 - Command "mine 10 dirt then say done"
 
-### Phase 6 Tests
+### Phase 5 Tests
 - Spawn 3 agents
 - Run /agentbuild
 - Verify parallel construction
 - Check no duplicate placements
 - Test in multiplayer server
 
-### Phase 7 Tests
+### Phase 6 Tests
 - Disconnect internet mid-command
 - Enter invalid API key
 - Spawn 10 agents, check FPS
@@ -604,21 +551,23 @@ Beyond in-game QA, add a lightweight `Tests/TerrarAI.Tests` project (xUnit/NUnit
 
 ## SUCCESS METRICS
 
-**MVP (Phases 1-5)**
-- Agent spawns and responds to natural language
-- xAI integration reliable
-- Basic actions execute correctly
-- UI functional and intuitive
+**MVP (Phases 1-4)** ✅ COMPLETE
+- Agent spawns and responds to natural language via chat commands
+- xAI integration reliable with timeout handling and verbose logging
+- Basic actions execute correctly (move, mine, place, say)
+- Agents render as full player character clones with all animations
 - Single-agent tasks complete successfully
+- Planning visibility with chat notifications and configurable timeouts
 
-**Complete (Phases 6-7)**
+**Complete (Phases 5-6)**
 - Multi-agent coordination works
 - Multiplayer stable
 - Error handling robust
 - Performance acceptable (60 FPS with 5+ agents)
+- Advanced context awareness and replanning
 
-**Advanced (Phase 8)**
+**Advanced (Phase 7)**
 - Combat, crafting, pathfinding functional
-- Voice commands work
 - Agent personality system implemented
 - Complex multi-agent strategies execute
+- Autonomous exploration mode

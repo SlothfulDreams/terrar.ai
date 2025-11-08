@@ -4,7 +4,12 @@ NPCs.AIAgentNPC.DisplayName: A I Agent N P C
 Configs: {
 	TerrarAI_Config: {
 		DisplayName: Terrar A I_ Config
-		Headers.xAI: x A I Header
+
+		Headers: {
+			xAI: x A I Header
+			Debugging: Debugging Header
+			Timeouts: Timeouts Header
+		}
 
 		ApiKey: {
 			Label: Api Key
@@ -24,6 +29,26 @@ Configs: {
 		BaseEndpoint: {
 			Label: Base Endpoint
 			Tooltip: ""
+		}
+
+		EnableVerboseLogging: {
+			Label: Enable Verbose Logging
+			Tooltip: Enable verbose logging of API requests and responses to the log file
+		}
+
+		ShowAgentThoughts: {
+			Label: Show Agent Thoughts
+			Tooltip: Show AI agent thought process in real-time as chat messages during planning
+		}
+
+		RequestTimeoutSeconds: {
+			Label: Request Timeout Seconds
+			Tooltip: HTTP request timeout in seconds for xAI API calls
+		}
+
+		MaxPlanningSeconds: {
+			Label: Max Planning Seconds
+			Tooltip: Maximum time in seconds an agent can stay in Planning state before auto-failing
 		}
 	}
 }
