@@ -1,3 +1,4 @@
+using Microsoft.Xna.Framework;
 using Terraria;
 
 namespace TerrarAI.Content.Actions
@@ -11,6 +12,24 @@ namespace TerrarAI.Content.Actions
         public virtual void Reset()
         {
         }
+
+        /// <summary>
+        /// Gets the required range in pixels for this action to execute.
+        /// Return 0 if no range validation is needed.
+        /// </summary>
+        public virtual float GetRequiredRange() => 0f;
+
+        /// <summary>
+        /// Gets the target tile for tile-based actions (mining, placing).
+        /// Return null if action is not tile-based.
+        /// </summary>
+        public virtual Point? GetTargetTile() => null;
+
+        /// <summary>
+        /// Gets the target position for position-based actions (combat, gathering).
+        /// Return null if action is not position-based.
+        /// </summary>
+        public virtual Vector2? GetTargetPosition() => null;
     }
 
     public readonly record struct AgentActionContext(NPC Agent, Player? Commander)

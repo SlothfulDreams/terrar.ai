@@ -7,12 +7,24 @@ Players type natural language commands → AI agents execute tasks in-game
 
 ## CURRENT STATE
 - **Phase 1 ✅ COMPLETE**: Config system, xAI client, `/testxai` command, server-only helpers all implemented and tested.
-- **Phase 2 ✅ COMPLETE**: AgentAction hierarchy, parser + validator, move/mine/place/say behaviors fully implemented and compiling.
+- **Phase 2 ✅ COMPLETE**: AgentAction hierarchy, parser + validator, move/mine/place/say behaviors fully implemented and compiling. Actions now include range validation, stability checks, and position verification during execution.
 - **Phase 3 ✅ COMPLETE**: AIAgentNPC with full state machine, `/spawnagent` and `/agentcmd` commands working. Agents now render as full player character clones with all animations (skin, hair, armor, accessories). Planning phase includes verbose logging, HTTP timeouts, planning timeouts, and chat notifications for visibility.
-- **Phase 4 ⚠️ REMOVED**: Command UI (CommandPanelUI, CommandUISystem, CommandUIPlayer) was removed in favor of simpler chat-only interface. All commands now use standard Terraria chat (`T` or `Enter` key).
-- **Enhancements**: Added comprehensive debugging features including verbose logging toggle, configurable timeouts (HTTP and planning), planning progress notifications in chat, and improved error handling with timeout detection.
-- **Rendering System**: Agents use Terraria's native `Main.PlayerRenderer.DrawPlayer()` for full player character rendering including all animations (walking, standing, mining, jumping, etc.).
-- Remaining phases (advanced prompting, coordination, polish, etc.) are still outstanding.
+- **Phase 4 ✅ ENHANCED**: Advanced context gathering implemented including:
+  - **Tile Scanning**: Expanded from 3×3 to 21×21 grid (441 tiles) with absolute coordinates, distances, and reachability status
+  - **Resource Discovery**: Dedicated `DescribeNearbyResources()` scans 31×31 grid for ores, trees, gems with tool requirement validation
+  - **Inventory Context**: `DescribeInventory()` provides placeable blocks and collected resources
+  - **Enhanced System Prompt**: Includes directional context, concrete coordinate conversion examples, and real-world positioning
+  - **Tool Integration**: `ToolSelector` system validates pickaxe power vs tile strength (15+ tile types with 0-200% power requirements)
+- **Phase 4 ⚠️ PARTIAL**: Memory system (`AgentMemory`, `PromptBuilder`) and observation reporting still outstanding
+- **Action Enhancements** (Post-Phase 3):
+  - **Mining Stability**: Added velocity zeroing, stability checks (velocity < 0.5), position validation every tick, and strong friction (0.5f)
+  - **Realistic Mining Speed**: Reduced from 0.3-0.5s to 1-3s (damage reduced from 3-5/tick to 1-2/tick)
+  - **Visible Animations**: Increased from 15 ticks to 30 ticks per swing (3-4 swings per mine vs 1.3 barely-visible)
+  - **Drift Prevention**: Triple-layer protection (stability check + init zeroing + continuous dampening)
+  - **Better Error Messages**: Context-rich failures with tile names, coordinates, and troubleshooting hints
+- **Rendering System**: Agents use Terraria's native `Main.PlayerRenderer.DrawPlayer()` for full player character rendering including all animations. Separated rendering logic into `AIAgentRenderer.cs`. Uses vanilla fallback texture (`Terraria/Images/NPC_0`) since custom sprite not needed.
+- **UI Changes**: Command UI (CommandPanelUI, CommandUISystem, CommandUIPlayer) was removed in favor of simpler chat-only interface. All commands now use standard Terraria chat (`T` or `Enter` key).
+- Remaining phases (multi-agent coordination, final polish, advanced features) are still outstanding.
 
 ---
 
@@ -443,36 +455,39 @@ TerrarAI/
 ├── TerrarAI_Config.cs             # User settings (API key, model, timeouts, verbose logging)
 ├── Content/
 │   ├── NPCs/
-│   │   ├── AgentState.cs          # State enum
-│   │   ├── AIAgentNPC.cs          # Main agent class with player rendering
-│   │   └── AIAgentNPC.png         # Sprite sheet (unused - agents render as player clones)
+│   │   ├── AIAgentNPC.cs          # ✅ Main agent class (includes AgentState enum, all context methods)
+│   │   └── AIAgentRenderer.cs     # ✅ Separated rendering logic for player appearance clones
 │   ├── Actions/
-│   │   ├── AgentAction.cs         # Abstract base
-│   │   ├── MoveAction.cs          # Navigation
-│   │   ├── MineAction.cs          # Break tiles
-│   │   ├── PlaceBlockAction.cs    # Place tiles
-│   │   ├── SayAction.cs           # Chat messages
-│   │   ├── CombatAction.cs        # Phase 7
-│   │   └── CraftAction.cs         # Phase 7
+│   │   ├── AgentAction.cs         # ✅ Abstract base with range validation (GetRequiredRange, GetTargetTile, GetTargetPosition)
+│   │   ├── MoveAction.cs          # ✅ Navigation with obstacle jumping, precise stopping
+│   │   ├── MineAction.cs          # ✅ Tool-based mining with stability checks, realistic speed (1-3s), visible animations
+│   │   ├── PlaceBlockAction.cs    # ✅ Tile placement with better error messages
+│   │   ├── SayAction.cs           # ✅ Chat messages
+│   │   ├── CombatAction.cs        # ❌ Phase 7 (not implemented)
+│   │   └── CraftAction.cs         # ❌ Phase 7 (not implemented)
 │   └── Systems/
-│       ├── XAIClient.cs           # xAI API client
-│       ├── ActionParser.cs        # JSON to Action parser
-│       ├── ActionValidator.cs     # Input sanitization/clamping
-│       ├── AgentMemory.cs         # Conversation history (Phase 4)
-│       ├── PromptBuilder.cs       # Context assembly (Phase 4)
-│       ├── AgentCoordinator.cs    # Multi-agent manager (Phase 5)
-│       └── BuildTask.cs           # Shared construction task (Phase 5)
+│       ├── XAIClient.cs           # ✅ xAI API client with streaming support
+│       ├── ActionParser.cs        # ✅ JSON to Action parser
+│       ├── ActionValidator.cs     # ✅ Input sanitization/clamping
+│       ├── ToolSelector.cs        # ✅ NEW: Tool management, tile strength validation (15+ tile types)
+│       ├── ServerAuthority.cs     # ✅ Server-side validation helpers
+│       ├── AgentMemory.cs         # ❌ Phase 4 (not implemented - conversation history)
+│       ├── PromptBuilder.cs       # ❌ Phase 4 (not implemented - context assembly)
+│       ├── AgentCoordinator.cs    # ❌ Phase 5 (not implemented - multi-agent manager)
+│       └── BuildTask.cs           # ❌ Phase 5 (not implemented - shared construction task)
 ├── Common/
-│   ├── Commands/
-│   │   ├── SpawnAgentCommand.cs   # /spawnagent
-│   │   ├── AgentCommand.cs        # /agentcmd
-│   │   ├── TestAPICommand.cs      # /testxai
-│   │   └── MultiAgentBuildCommand.cs  # /agentbuild (Phase 5)
-│   └── Helpers/
-│       └── ServerAuthority.cs     # Server-side validation helpers
+│   └── Commands/
+│       ├── SpawnAgentCommand.cs   # ✅ /spawnagent
+│       ├── AgentCommand.cs        # ✅ /agentcmd
+│       ├── TestAPICommand.cs      # ✅ /testxai
+│       └── MultiAgentBuildCommand.cs  # ❌ Phase 5 (not implemented - /agentbuild)
 └── Tests/
-    └── TerrarAI.Tests/            # xUnit/NUnit project with mocks
+    └── TerrarAI.Tests/            # ❌ Not implemented (xUnit/NUnit project with mocks)
 ```
+
+**Legend:**
+- ✅ = Implemented and working
+- ❌ = Not implemented (future work)
 
 ---
 
