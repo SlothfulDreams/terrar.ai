@@ -144,6 +144,7 @@ Create the main agent NPC entity with state machine and xAI integration.
 11. Create /spawnagent command
 12. Extract common movement logic into MovementHelper (ground checks, jump assist, adaptive tolerance)
 13. Support creative-mode travel/tools (config toggle) so NPCs can snap to coordinates and place blocks without inventory limits
+14. Detect hellevator/vertical-digging commands and enforce a 2x2 shaft (column clamping + auto-centering) regardless of model output
 
 ### File Structure
 ```
@@ -200,6 +201,7 @@ Format: {"actions": [{"type": "action", "params": {...}}]}
 - Server remains authoritative for planning/execution; clients only send commands/display packets
 - MovementHelper coordinates all navigation (ground checks + jumps) across actions
 - Creative mode toggle allows instant movement/placement without using commander inventory
+- Hellevator detection keeps the agent centered and mining a 2x2 column even if the LLM returns misaligned coordinates
 
 ---
 
@@ -222,6 +224,7 @@ Improve xAI context awareness and response quality.
 11. Implement ModelRouter heuristics (word count + keywords) to choose between fast vs reasoning models
 12. Add config knobs for router thresholds, reasoning model/temperature
 13. Update XAIClient to log routing decisions (model, reason) for debugging
+14. Standardize context strings (tiles/resources/players) to include tile coords, pixel coords, Δtile/Δpx, direction, reachability
 
 ### File Structure
 ```
@@ -261,6 +264,7 @@ AgentMemory maintains:
 - Agent maintains conversation history
 - Agent can replan when actions fail
 - Model router selects reasoning model for long/complex prompts
+- Context strings always contain actionable coordinate + delta data so LLM can move/mine precisely
 - Complex commands work ("mine 10 dirt then build platform")
 
 ---

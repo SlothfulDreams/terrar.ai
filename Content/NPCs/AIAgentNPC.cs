@@ -41,6 +41,9 @@ namespace TerrarAI.Content.NPCs
         private string _statusMessage = "Idle";
         private string? _lastPlannerError;
         private Player? _commander;
+        private bool _hellevatorMode;
+        private int? _hellevatorColumnLeft;
+        private float? _hellevatorCenterPixelX;
 
         private const float IdleFriction = 0.85f;
         private const int MAX_REPLAN_CYCLES = 25;  // Maximum replanning attempts before forcing completion
@@ -341,6 +344,9 @@ namespace TerrarAI.Content.NPCs
 
             _actionQueue.Clear();
             _currentAction = null;
+            _hellevatorMode = DetectHellevatorCommand(_currentCommand);
+            _hellevatorColumnLeft = null;
+            _hellevatorCenterPixelX = null;
 
             State = AgentState.Planning;
             UpdateStatus("Planning...");
@@ -677,6 +683,29 @@ namespace TerrarAI.Content.NPCs
 
             // Range validation: Check if agent is close enough to target
             // Don't check range for MoveAction - it handles its own distance logic
+            if (_hellevatorMode && _currentAction is MineAction hellevatorMine)
+            {
+                var targetTile = hellevatorMine.GetTargetTile();
+                if (targetTile.HasValue)
+                {
+                    EnsureHellevatorColumnInitialized(targetTile.Value.X);
+                    var clamped = ClampToHellevatorColumn(targetTile.Value);
+                    if (clamped != targetTile.Value)
+                    {
+                        _currentAction.Reset();
+                        _currentAction = new MineAction(clamped);
+                        hellevatorMine = (MineAction)_currentAction;
+                        targetTile = clamped;
+                        UpdateStatus($"Aligning hellevator shaft to tile({clamped.X},{clamped.Y})");
+                    }
+                }
+
+                if (!EnsureHellevatorCenter())
+                {
+                    return;
+                }
+            }
+
             if (_currentAction is not MoveAction)
             {
                 var (distance, targetPos) = GetTargetInfo(_currentAction);
@@ -1298,6 +1327,73 @@ namespace TerrarAI.Content.NPCs
             var pixelY = tileY * 16 + 8;
             var reachStr = reachable ? "REACHABLE" : $"{distance:F0}px";
             return $"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) Δtile({relTileX},{relTileY}) Δpx({relPixelX:F0},{relPixelY:F0}) dir[{direction}] [{reachStr}]";
+        }
+
+        private bool DetectHellevatorCommand(string? command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+            {
+                return false;
+            }
+
+            var text = command.ToLowerInvariant();
+            string[] keywords =
+            [
+                "hellevator",
+                "hellavator",
+                "dig straight down",
+                "dig straight",
+                "dig down",
+                "vertical shaft",
+                "hole to hell"
+            ];
+
+            return keywords.Any(text.Contains);
+        }
+
+        private void EnsureHellevatorColumnInitialized(int tileX)
+        {
+            if (!_hellevatorMode || _hellevatorColumnLeft.HasValue)
+            {
+                return;
+            }
+
+            var column = tileX % 2 == 0 ? tileX : tileX - 1;
+            _hellevatorColumnLeft = column;
+            _hellevatorCenterPixelX = column * 16f + 16f;
+        }
+
+        private Point ClampToHellevatorColumn(Point tile)
+        {
+            if (!_hellevatorMode || !_hellevatorColumnLeft.HasValue)
+            {
+                return tile;
+            }
+
+            int left = _hellevatorColumnLeft.Value;
+            int clampedX = Math.Clamp(tile.X, left, left + 1);
+            return new Point(clampedX, tile.Y);
+        }
+
+        private bool EnsureHellevatorCenter()
+        {
+            if (!_hellevatorMode || !_hellevatorCenterPixelX.HasValue)
+            {
+                return true;
+            }
+
+            float centerX = _hellevatorCenterPixelX.Value;
+            float delta = centerX - NPC.Center.X;
+            if (Math.Abs(delta) <= 6f)
+            {
+                NPC.velocity.X *= 0.5f;
+                return true;
+            }
+
+            float adjust = MathHelper.Clamp(delta / 18f, -2.2f, 2.2f);
+            NPC.velocity.X = adjust;
+            UpdateStatus("Centering in hellevator shaft...");
+            return false;
         }
 
         private string DescribeNearbyResources()
