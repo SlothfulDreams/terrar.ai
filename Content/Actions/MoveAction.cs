@@ -1,6 +1,7 @@
 using System;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
+using TerrarAI;
 using TerrarAI.Content.Systems;
 using Terraria;
 
@@ -11,27 +12,14 @@ namespace TerrarAI.Content.Actions
         private readonly Vector2 _targetPixels;
         private readonly float _tolerance;
         private readonly float _speed;
-
-        // Timeout tracking
-        private int _frameCounter = 0;
-        private const int MAX_MOVEMENT_FRAMES = 600; // 10 seconds at 60 FPS
-
-        // Stagnation detection
-        private Vector2 _lastPosition;
-        private int _stagnantFrames = 0;
-        private const float PROGRESS_THRESHOLD = 0.5f; // pixels per frame
-        private const int MAX_STAGNANT_FRAMES = 120; // 2 seconds at 60 FPS
-
-        // Adaptive tolerance
-        private float _currentTolerance;
+        private MovementHelper.MovementState _movementState;
 
         public MoveAction(Vector2 targetPixels, float tolerance = 32f, float speed = 4f)
         {
             _targetPixels = targetPixels;
             _tolerance = tolerance;
             _speed = speed;
-            _currentTolerance = tolerance;
-            _lastPosition = Vector2.Zero;
+            _movementState = MovementHelper.MovementState.Create(tolerance);
         }
 
         public override string Name => "move";
@@ -47,74 +35,21 @@ namespace TerrarAI.Content.Actions
 
             var npc = context.Agent;
 
-            // Layer 1: Frame counter timeout (primary protection)
-            _frameCounter++;
-            if (_frameCounter > MAX_MOVEMENT_FRAMES)
+            if (TerrarAI_Config.Get().EnableCreativeMode)
             {
-                return AgentActionResult.Failure($"Movement timed out after 10 seconds. Could not reach {_targetPixels}.");
+                npc.Center = _targetPixels;
+                npc.velocity = Vector2.Zero;
+                return AgentActionResult.Success($"Snapped to {_targetPixels} (creative mode).");
             }
 
-            // Layer 2: Stagnation detection (obstacle detection)
-            if (_lastPosition != Vector2.Zero) // Skip first frame
-            {
-                float distanceMoved = Vector2.Distance(_lastPosition, npc.Center);
-                if (distanceMoved < PROGRESS_THRESHOLD)
-                {
-                    _stagnantFrames++;
-                    if (_stagnantFrames > MAX_STAGNANT_FRAMES)
-                    {
-                        return AgentActionResult.Failure(
-                            $"Movement stalled near {npc.Center}. Obstacle likely blocking path to {_targetPixels}.");
-                    }
-                }
-                else
-                {
-                    _stagnantFrames = 0; // Reset stagnation counter if making progress
-                }
-            }
-            _lastPosition = npc.Center;
-
-            // Layer 3: Adaptive tolerance (progressive relaxation)
-            if (_frameCounter % 120 == 0) // Every 2 seconds
-            {
-                _currentTolerance += 16f; // Increase tolerance by 1 tile
-            }
-
-            var delta = _targetPixels - npc.Center;
-            var distanceSq = delta.LengthSquared();
-
-            // Check if arrived at target (using adaptive tolerance)
-            if (distanceSq <= _currentTolerance * _currentTolerance)
-            {
-                npc.velocity.X = 0;  // Stop horizontal movement completely
-                npc.velocity.Y = 0;  // Stop any vertical movement
-                return AgentActionResult.Success($"Arrived near {_targetPixels}");
-            }
-
-            // Horizontal movement (player-like walking)
-            float desiredVelocityX = Math.Clamp(delta.X / 10f, -_speed, _speed);
-            npc.velocity.X = MathHelper.Lerp(npc.velocity.X, desiredVelocityX, 0.35f);
-            npc.direction = desiredVelocityX >= 0 ? 1 : -1;
-
-            // Jump logic - detect if agent needs to jump over obstacles or onto ledges
-            bool movingHorizontally = Math.Abs(desiredVelocityX) > 0.35f;
-            bool stuck = movingHorizontally && Math.Abs(npc.velocity.X) < 0.2f;
-
-            if ((stuck || delta.Y < -24f) && movingHorizontally)
-            {
-                MovementHelper.TryJump(npc, desiredVelocityX, delta.Y);
-            }
-
-            return AgentActionResult.Pending($"Moving to {_targetPixels}");
+            var settings = MovementHelper.MovementSettings.Create(_speed, _tolerance);
+            return MovementHelper.MoveTowards(npc, _targetPixels, ref _movementState, settings);
         }
 
         public override void Reset()
         {
             base.Reset();
-            _frameCounter = 0;
-            _stagnantFrames = 0;
-            _lastPosition = Vector2.Zero;
-            _currentTolerance = _tolerance;
+            _movementState.Reset(_tolerance);
         }
 
         public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)

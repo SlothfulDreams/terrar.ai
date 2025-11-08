@@ -142,6 +142,8 @@ Create the main agent NPC entity with state machine and xAI integration.
 9. Execute actions from queue frame-by-frame
 10. Add PostDraw() visual state indicator above agent
 11. Create /spawnagent command
+12. Extract common movement logic into MovementHelper (ground checks, jump assist, adaptive tolerance)
+13. Support creative-mode travel/tools (config toggle) so NPCs can snap to coordinates and place blocks without inventory limits
 
 ### File Structure
 ```
@@ -196,6 +198,8 @@ Format: {"actions": [{"type": "action", "params": {...}}]}
 - State displays above agent head (colored text)
 - Agent completes simple commands ("say hello", "move to 1000 500")
 - Server remains authoritative for planning/execution; clients only send commands/display packets
+- MovementHelper coordinates all navigation (ground checks + jumps) across actions
+- Creative mode toggle allows instant movement/placement without using commander inventory
 
 ---
 
@@ -215,6 +219,9 @@ Improve xAI context awareness and response quality.
 8. Add failure detection in action execution
 9. Implement replanning logic (send failure to xAI, get new plan)
 10. Add observation reporting after action completion
+11. Implement ModelRouter heuristics (word count + keywords) to choose between fast vs reasoning models
+12. Add config knobs for router thresholds, reasoning model/temperature
+13. Update XAIClient to log routing decisions (model, reason) for debugging
 
 ### File Structure
 ```
@@ -222,6 +229,7 @@ Content/
   Systems/
     AgentMemory.cs
     PromptBuilder.cs
+    ModelRouter.cs
 ```
 
 ### Context Gathering
@@ -252,6 +260,7 @@ AgentMemory maintains:
 - Agent includes nearby entities in decisions
 - Agent maintains conversation history
 - Agent can replan when actions fail
+- Model router selects reasoning model for long/complex prompts
 - Complex commands work ("mine 10 dirt then build platform")
 
 ---

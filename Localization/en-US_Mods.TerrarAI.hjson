@@ -50,5 +50,35 @@ Configs: {
 			Label: Max Planning Seconds
 			Tooltip: Maximum time in seconds an agent can stay in Planning state before auto-failing
 		}
+
+		EnableCreativeMode: {
+			Label: Enable Creative Mode
+			Tooltip: When enabled, agents gain creative-mode powers: unlimited building materials and best-in-slot tools.
+		}
+
+		ReasoningModel: {
+			Label: Reasoning Model
+			Tooltip: ""
+		}
+
+		ReasoningTemperature: {
+			Label: Reasoning Temperature
+			Tooltip: ""
+		}
+
+		EnableModelRouter: {
+			Label: Enable Model Router
+			Tooltip: ""
+		}
+
+		RouterWordThreshold: {
+			Label: Router Word Threshold
+			Tooltip: ""
+		}
+
+		RouterComplexKeywords: {
+			Label: Router Complex Keywords
+			Tooltip: ""
+		}
 	}
 }
