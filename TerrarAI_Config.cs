@@ -9,21 +9,40 @@ namespace TerrarAI
     {
         public override ConfigScope Mode => ConfigScope.ServerSide;
 
-        [Header("xAI")]
         [DefaultValue("")]
         public string ApiKey { get; set; } = string.Empty;
 
         [DefaultValue("grok-4-fast-non-reasoning")]
         public string Model { get; set; } = "grok-4-fast-non-reasoning";
 
+        [DefaultValue("grok-4-fast-reasoning")]
+        public string ReasoningModel { get; set; } = "grok-4-fast-reasoning";
+
         [Range(0f, 2f)]
         [DefaultValue(0.7f)]
         public float Temperature { get; set; } = 0.7f;
 
+        [Range(0f, 2f)]
+        [DefaultValue(0.4f)]
+        public float ReasoningTemperature { get; set; } = 0.4f;
+
         [DefaultValue("https://api.x.ai/v1/chat/completions")]
         public string BaseEndpoint { get; set; } = "https://api.x.ai/v1/chat/completions";
 
-        [Header("Debugging")]
+        [DefaultValue(false)]
+        public bool EnableModelRouter { get; set; } = false;
+
+        [Range(20, 500)]
+        [DefaultValue(150)]
+        public int RouterWordThreshold { get; set; } = 150;
+
+        [DefaultValue("build,structure,architect,arena,defend,automation,bridge,castle,farm,boss fight,multiple steps")]
+        public string RouterComplexKeywords { get; set; } = "build,structure,architect,arena,defend,automation,bridge,castle,farm,boss fight,multiple steps";
+
+        [DefaultValue(false)]
+        [Tooltip("When enabled, agents gain creative-mode powers: unlimited building materials and best-in-slot tools.")]
+        public bool EnableCreativeMode { get; set; } = false;
+
         [DefaultValue(false)]
         [Tooltip("Enable verbose logging of API requests and responses to the log file")]
         public bool EnableVerboseLogging { get; set; } = false;
@@ -32,7 +51,6 @@ namespace TerrarAI
         [Tooltip("Show AI agent thought process in real-time as chat messages during planning")]
         public bool ShowAgentThoughts { get; set; } = false;
 
-        [Header("Timeouts")]
         [Range(10, 300)]
         [DefaultValue(60)]
         [Tooltip("HTTP request timeout in seconds for xAI API calls")]

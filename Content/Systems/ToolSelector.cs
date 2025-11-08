@@ -1,3 +1,4 @@
+using TerrarAI;
 using Terraria;
 using Terraria.ID;
 
@@ -18,6 +19,11 @@ namespace TerrarAI.Content.Systems
         /// </summary>
         public static Item? FindBestTool(Player? player, ToolType toolType, int minPower = 0)
         {
+            if (TerrarAI_Config.Get().EnableCreativeMode)
+            {
+                return CreateCreativeTool(toolType);
+            }
+
             if (player == null || player.inventory == null)
             {
                 return null;
@@ -148,6 +154,44 @@ namespace TerrarAI.Content.Systems
                 ToolType.Weapon => $"{tool.Name} ({tool.damage} damage)",
                 _ => tool.Name
             };
+        }
+
+        private static Item CreateCreativeTool(ToolType toolType)
+        {
+            var item = new Item();
+
+            switch (toolType)
+            {
+                case ToolType.Pickaxe:
+                    item.SetDefaults(ItemID.PickaxeAxe);
+                    item.pick = 1000;
+                    item.SetNameOverride("Creative Pickaxe");
+                    break;
+                case ToolType.Axe:
+                    item.SetDefaults(ItemID.SpectrePickaxe);
+                    item.axe = 500;
+                    item.SetNameOverride("Creative Axe");
+                    break;
+                case ToolType.Hammer:
+                    item.SetDefaults(ItemID.TheBreaker);
+                    item.hammer = 500;
+                    item.SetNameOverride("Creative Hammer");
+                    break;
+                case ToolType.Weapon:
+                    item.SetDefaults(ItemID.TerraBlade);
+                    item.damage = 999;
+                    item.SetNameOverride("Creative Weapon");
+                    break;
+                default:
+                    item.SetDefaults(ItemID.CopperPickaxe);
+                    item.pick = 1000;
+                    item.SetNameOverride("Creative Tool");
+                    break;
+            }
+
+            item.rare = ItemRarityID.Red;
+            item.accessory = false;
+            return item;
         }
     }
 }

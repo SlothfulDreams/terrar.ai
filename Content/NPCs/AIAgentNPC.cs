@@ -1124,14 +1124,9 @@ namespace TerrarAI.Content.NPCs
                 {
                     var relX = tileX - agentTileX;
                     var relY = tileY - agentTileY;
-                    var direction = GetDirectionString(relX, relY);
-                    var reachableStr = reachable ? "REACHABLE" : $"{distance:F0}px";
-
-                    // Provide pixel coordinates directly - no LLM math needed
-                    var pixelX = tileX * 16 + 8;
-                    var pixelY = tileY * 16 + 8;
-
-                    builder.Append($"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) {direction} [{reachableStr}]; ");
+                    var relPixelX = relX * 16f;
+                    var relPixelY = relY * 16f;
+                    builder.Append($"{FormatPositionDescriptor(tileX, tileY, relPixelX, relPixelY, distance, reachable)}; ");
                 }
 
                 if (tiles.Count > closestTiles.Count)
@@ -1184,6 +1179,17 @@ namespace TerrarAI.Content.NPCs
             else if (relY < 0) directions.Add($"{-relY}↑");
 
             return directions.Count > 0 ? string.Join(",", directions) : "here";
+        }
+
+        private string FormatPositionDescriptor(int tileX, int tileY, float relPixelX, float relPixelY, float distance, bool reachable)
+        {
+            var relTileX = (int)Math.Round(relPixelX / 16f);
+            var relTileY = (int)Math.Round(relPixelY / 16f);
+            var direction = GetDirectionString(relTileX, relTileY);
+            var pixelX = tileX * 16 + 8;
+            var pixelY = tileY * 16 + 8;
+            var reachStr = reachable ? "REACHABLE" : $"{distance:F0}px";
+            return $"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) Δtile({relTileX},{relTileY}) Δpx({relPixelX:F0},{relPixelY:F0}) dir[{direction}] [{reachStr}]";
         }
 
         private string DescribeNearbyResources()
@@ -1277,12 +1283,9 @@ namespace TerrarAI.Content.NPCs
                         }
                     }
 
-                    // Provide pixel coordinates directly - no LLM math needed
-                    var pixelX = tileX * 16 + 8;
-                    var pixelY = tileY * 16 + 8;
-
-                    var reachStr = reachable ? "REACHABLE" : $"{distance:F0}px";
-                    builder.Append($"tile({tileX},{tileY}) pixels({pixelX},{pixelY}) {direction} [{reachStr}]{toolStatus}; ");
+                    var relPixelX = relX * 16f;
+                    var relPixelY = relY * 16f;
+                    builder.Append($"{FormatPositionDescriptor(tileX, tileY, relPixelX, relPixelY, distance, reachable)}{toolStatus}; ");
                 }
 
                 if (group.Count() > closest.Count)
@@ -1298,19 +1301,48 @@ namespace TerrarAI.Content.NPCs
 
         private string DescribeNearbyPlayers()
         {
-            var players = Main.player.Where(p => p?.active == true && !p.dead);
-            var closePlayers = players
-                .Select(p => new { Player = p, Distance = Vector2.Distance(p.Center, NPC.Center) })
-                .Where(info => info.Distance <= 600f)
-                .OrderBy(info => info.Distance)
-                .Take(3)
-                .Select(info => $"{info.Player.name} ({info.Distance:F0}px)");
+            var agentTileX = (int)(NPC.Center.X / 16f);
+            var agentTileY = (int)(NPC.Center.Y / 16f);
 
-            return closePlayers.Any() ? string.Join(", ", closePlayers) : "No nearby players";
+            var closePlayers = Main.player
+                .Where(p => p?.active == true && !p.dead)
+                .Select(p => new
+                {
+                    Player = p,
+                    TileX = (int)(p.Center.X / 16f),
+                    TileY = (int)(p.Center.Y / 16f),
+                    Distance = Vector2.Distance(p.Center, NPC.Center),
+                    RelPixelX = p.Center.X - NPC.Center.X,
+                    RelPixelY = p.Center.Y - NPC.Center.Y
+                })
+                .Where(info => info.Distance <= 1000f)
+                .OrderBy(info => info.Distance)
+                .Take(5)
+                .ToList();
+
+            if (closePlayers.Count == 0)
+            {
+                return "No nearby players";
+            }
+
+            var builder = new StringBuilder();
+            foreach (var info in closePlayers)
+            {
+                var relTileX = info.TileX - agentTileX;
+                var relTileY = info.TileY - agentTileY;
+                builder.Append($"- {info.Player.name}: {FormatPositionDescriptor(info.TileX, info.TileY, info.RelPixelX, info.RelPixelY, info.Distance, info.Distance <= 80f)}; ");
+            }
+
+            return builder.ToString();
         }
 
         private string DescribeInventory()
         {
+            if (TerrarAI_Config.Get().EnableCreativeMode)
+            {
+                return "INVENTORY:\nCreative mode enabled – agent has unlimited tools and building materials (commander inventory ignored).";
+            }
+
             if (_commander == null)
             {
                 return "No inventory available (no commander)";

@@ -35,18 +35,22 @@ namespace TerrarAI.Content.Systems
                 throw new InvalidOperationException("Set an xAI API key in the TerrarAI config before making requests.");
             }
 
+            var route = ModelRouter.SelectModel(userPrompt, conversationHistory);
+
             if (config.EnableVerboseLogging)
             {
-                ModContent.GetInstance<TerrarAI>().Logger.Info("[XAIClient] === API Request ===");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] Model: {config.Model}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] Temperature: {config.Temperature}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] System Prompt: {systemPrompt}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] User Prompt: {userPrompt}");
+                var logger = ModContent.GetInstance<TerrarAI>().Logger;
+                logger.Info("[XAIClient] === API Request ===");
+                logger.Info($"[XAIClient] Selected Model: {route.Model} ({route.RouteType})");
+                logger.Info($"[XAIClient] Temperature: {route.Temperature}");
+                logger.Info($"[XAIClient] Router reason: {route.Reason}");
+                logger.Info($"[XAIClient] System Prompt: {systemPrompt}");
+                logger.Info($"[XAIClient] User Prompt: {userPrompt}");
             }
 
             var request = new HttpRequestMessage(HttpMethod.Post, config.BaseEndpoint)
             {
-                Content = new StringContent(BuildPayload(config.Model, config.Temperature, systemPrompt, userPrompt, conversationHistory), Encoding.UTF8, "application/json")
+                Content = new StringContent(BuildPayload(route.Model, route.Temperature, systemPrompt, userPrompt, conversationHistory), Encoding.UTF8, "application/json")
             };
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
@@ -119,18 +123,22 @@ namespace TerrarAI.Content.Systems
                 throw new InvalidOperationException("Set an xAI API key in the TerrarAI config before making requests.");
             }
 
+            var route = ModelRouter.SelectModel(userPrompt, null);
+
             if (config.EnableVerboseLogging)
             {
-                ModContent.GetInstance<TerrarAI>().Logger.Info("[XAIClient] === API Streaming Request ===");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] Model: {config.Model}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] Temperature: {config.Temperature}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] System Prompt: {systemPrompt}");
-                ModContent.GetInstance<TerrarAI>().Logger.Info($"[XAIClient] User Prompt: {userPrompt}");
+                var logger = ModContent.GetInstance<TerrarAI>().Logger;
+                logger.Info("[XAIClient] === API Streaming Request ===");
+                logger.Info($"[XAIClient] Selected Model: {route.Model} ({route.RouteType})");
+                logger.Info($"[XAIClient] Temperature: {route.Temperature}");
+                logger.Info($"[XAIClient] Router reason: {route.Reason}");
+                logger.Info($"[XAIClient] System Prompt: {systemPrompt}");
+                logger.Info($"[XAIClient] User Prompt: {userPrompt}");
             }
 
             var request = new HttpRequestMessage(HttpMethod.Post, config.BaseEndpoint)
             {
-                Content = new StringContent(BuildPayload(config.Model, config.Temperature, systemPrompt, userPrompt, stream: true), Encoding.UTF8, "application/json")
+                Content = new StringContent(BuildPayload(route.Model, route.Temperature, systemPrompt, userPrompt, stream: true), Encoding.UTF8, "application/json")
             };
 
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
