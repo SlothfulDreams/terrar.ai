@@ -58,6 +58,10 @@ namespace TerrarAI.Content.NPCs
         private long _planningStartTick;
         private long _maxPlanningTicks;
 
+        // Execution timeout tracking
+        private long _executionStartTick;
+        private const long EXECUTION_TIMEOUT_TICKS = 300; // 5 seconds at 60 FPS
+
         // Follower AI - Teleportation and stuck detection
         private int _stuckTimer = 0;
         private Vector2 _lastPosition = Vector2.Zero;
@@ -369,6 +373,7 @@ namespace TerrarAI.Content.NPCs
             _replanCycleCount = 0;  // Reset replan counter for new task
             _conversationHistory.Clear();  // Clear conversation history for new task
             _lastPlannerError = null;
+            _executionStartTick = 0;  // Reset execution timeout for new command
 
             _actionQueue.Clear();
             _currentAction = null;
@@ -678,6 +683,7 @@ namespace TerrarAI.Content.NPCs
                 var actions = ActionParser.Parse(response, NPC, _validator, _commander);
                 QueueActions(actions);
                 State = AgentState.Executing;
+                _executionStartTick = Main.GameUpdateCount;  // Track when execution started
                 UpdateStatus("Executing plan...");
                 SendChatMessage($"Planning complete! Executing {actions.Count} action(s).", Color.LightGreen);
                 Mod.Logger.Info($"[TickPlanning] Successfully transitioned to Executing state with {actions.Count} actions");
@@ -708,6 +714,30 @@ namespace TerrarAI.Content.NPCs
         private void TickExecuting()
         {
             Mod.Logger.Info($"[TickExecuting] Entry - _currentAction={((_currentAction == null) ? "null" : _currentAction.Name)}, queueCount={_actionQueue.Count}");
+
+            // Check execution timeout - if executing same task for more than 5 seconds, replan
+            // Exclude HellevatorAction from timeout since it's a long-running task that reports progress
+            if (_executionStartTick > 0 && _currentAction is not HellevatorAction)
+            {
+                long executionTicks = Main.GameUpdateCount - _executionStartTick;
+                if (executionTicks >= EXECUTION_TIMEOUT_TICKS)
+                {
+                    Mod.Logger.Info($"[TickExecuting] Execution timeout after {executionTicks} ticks, triggering replan");
+                    _actionQueue.Clear();
+                    _currentAction?.Reset();
+                    _currentAction = null;
+                    _replanContext = $"Execution timeout after 5 seconds. Task may be stuck.";
+                    State = AgentState.Replanning;
+                    UpdateStatus("Execution timeout, replanning...");
+                    
+                    // Only start planning if not already planning (avoid concurrent API calls)
+                    if (_plannerTask == null)
+                    {
+                        BeginPlanning();
+                    }
+                    return;
+                }
+            }
 
             if (_currentAction == null)
             {
@@ -852,6 +882,7 @@ namespace TerrarAI.Content.NPCs
                     // Store the result for the next planning cycle (prompt chaining)
                     var actionName = _currentAction.Name;
                     var isCompleteAction = _currentAction is CompleteAction;
+                    var canFailAndGiveUp = _currentAction.CanFailAndGiveUp; // Store before clearing
                     _previousActionResult = !string.IsNullOrWhiteSpace(result.Message)
                         ? $"{actionName}: {result.Message}"
                         : $"{actionName} completed successfully";
@@ -878,29 +909,31 @@ namespace TerrarAI.Content.NPCs
                     }
                     else
                     {
-                        // Increment replan cycle counter
-                        _replanCycleCount++;
+                        // Only increment replan cycle counter if action can fail and give up
+                        if (canFailAndGiveUp)
+                        {
+                            _replanCycleCount++;
 
-                        // Check if we've exceeded max replan cycles (prevents infinite loops)
-                        if (_replanCycleCount >= MAX_REPLAN_CYCLES)
-                        {
-                            State = AgentState.Completed;
-                            UpdateStatus($"Task incomplete after {MAX_REPLAN_CYCLES} attempts.");
-                            SendChatMessage($"I've tried {MAX_REPLAN_CYCLES} times but can't complete this task. Giving up.", Color.Orange);
-                            ClearHellevatorState();  // Clear hellevator state on max replan cycles
-                            _replanCycleCount = 0;
-                            _plannerTask = null;
-                            _previousActionResult = null;
+                            // Check if we've exceeded max replan cycles (prevents infinite loops)
+                            if (_replanCycleCount >= MAX_REPLAN_CYCLES)
+                            {
+                                State = AgentState.Completed;
+                                UpdateStatus($"Task incomplete after {MAX_REPLAN_CYCLES} attempts.");
+                                SendChatMessage($"I've tried {MAX_REPLAN_CYCLES} times but can't complete this task. Giving up.", Color.Orange);
+                                ClearHellevatorState();  // Clear hellevator state on max replan cycles
+                                _replanCycleCount = 0;
+                                _plannerTask = null;
+                                _previousActionResult = null;
+                                break;
+                            }
                         }
-                        else
-                        {
-                            // Clear remaining queue and replan after this action
-                            _actionQueue.Clear();
-                            _replanContext = _previousActionResult;
-                            State = AgentState.Replanning;
-                            UpdateStatus($"Replanning next action... (cycle {_replanCycleCount}/{MAX_REPLAN_CYCLES})");
-                            BeginPlanning();
-                        }
+
+                        // Clear remaining queue and replan after this action
+                        _actionQueue.Clear();
+                        _replanContext = _previousActionResult;
+                        State = AgentState.Replanning;
+                        UpdateStatus($"Replanning next action... (cycle {_replanCycleCount}/{MAX_REPLAN_CYCLES})");
+                        BeginPlanning();
                     }
                     break;
                 case AgentActionStatus.Failure:
@@ -982,6 +1015,13 @@ namespace TerrarAI.Content.NPCs
             if (string.IsNullOrWhiteSpace(_currentCommand))
             {
                 HandlePlannerFailure("No command provided.");
+                return;
+            }
+
+            // Don't start a new planning task if one is already in progress
+            if (_plannerTask != null && !_plannerTask.IsCompleted)
+            {
+                Mod.Logger.Info("[BeginPlanning] Planning task already in progress, skipping new request");
                 return;
             }
 
@@ -1142,11 +1182,13 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- move(tileX, tileY): Move to a tile. Jumps over obstacles and gaps automatically.");
             sb.AppendLine("- chop(tileX, tileY): Chop a tree trunk. Auto-moves to target.");
             sb.AppendLine("- mine(tileX, tileY): Mine ore/stone. Auto-moves to target.");
+            sb.AppendLine("- hellevator([startX]): Dig a 3x3 tunnel straight down to the underworld. Keeps you centered on the middle column and re-centers if knocked off. Stops at underworld.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
             sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood). Auto-moves first.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
             sb.AppendLine("- chop/mine actions automatically move you close enough.");
+            sb.AppendLine("- hellevator() mines a 3x3 area, keeps you centered on the middle column, and stops at underworld.");
             sb.AppendLine("- Items are AUTO-COLLECTED after every action! Mining/chopping drops items which are automatically added to inventory.");
 
             sb.AppendLine();
@@ -1197,15 +1239,11 @@ namespace TerrarAI.Content.NPCs
             if (_hellevatorMode)
             {
                 sb.AppendLine();
-                sb.AppendLine("⚠️ HELLEVATOR MODE ACTIVE - Special Rules:");
-                sb.AppendLine("- Mine BOTH tiles (left and right) at each Y level before descending to next row");
-                sb.AppendLine("- Work top-to-bottom: Complete current row (Y=N) before moving to next row (Y=N+1)");
-                sb.AppendLine("- Recommended pattern: mine(leftX,Y) → mine(rightX,Y) → mine(leftX,Y+1) → mine(rightX,Y+1) → ...");
-                sb.AppendLine("- Gravity pulls you down automatically through cleared shaft - NO move actions needed!");
-                sb.AppendLine("- System auto-centers you horizontally in the 2-tile shaft - focus only on Y progression");
-                sb.AppendLine("- Plan in small batches: 4-6 mine actions (2-3 rows) before replanning to adapt to obstacles");
-                sb.AppendLine("- Check NEARBY TILES - stop and use 'complete' if you encounter lava, unmineable blocks, or large caverns");
-                sb.AppendLine("- Your X coordinates will be automatically clamped to maintain the 2-wide shaft alignment");
+            sb.AppendLine("⚠️ HELLEVATOR MODE ACTIVE - Use hellevator() action:");
+            sb.AppendLine("- Use hellevator() action - it handles everything automatically");
+            sb.AppendLine("- Mines a 3x3 area, keeps you centered on the middle column, reports every 20 blocks");
+            sb.AppendLine("- Stops automatically when reaching underworld");
+            sb.AppendLine("- DO NOT use individual mine() actions - use hellevator() instead");
             }
 
             sb.AppendLine();
@@ -1270,35 +1308,14 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("}");
             sb.AppendLine();
 
-            // Example 4: Hellevator digging pattern
-            int hellevatorStartX = agentTileX;
-            int hellevatorStartY = agentTileY + 2;  // Start digging below current position
-            sb.AppendLine($"Example 4: Task is \"dig a hellevator\" starting at current position");
-            sb.AppendLine($"  First action - Mine left tile of first row:");
+            // Example 4: Hellevator digging
+            sb.AppendLine($"Example 4: Task is \"dig me a hellevator\"");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"At tile({agentTileX},{agentTileY}), need to dig vertical 2x2 shaft downward\",");
-            sb.AppendLine($"  \"thought\": \"Start hellevator by mining left tile of first row. System will auto-align to create consistent 2-wide shaft.\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX},\"tileY\":{hellevatorStartY}}}}}");
+            sb.AppendLine($"  \"observation\": \"Need to dig a hellevator to the underworld\",");
+            sb.AppendLine($"  \"thought\": \"Use hellevator action - it handles everything automatically\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"hellevator\",\"params\":{{}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  Second action - Mine right tile of same row:");
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Mined tile({hellevatorStartX},{hellevatorStartY}), system centered me in 2-tile shaft\",");
-            sb.AppendLine($"  \"thought\": \"Complete this row by mining the adjacent tile to the right, creating full 2-wide opening\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX + 1},\"tileY\":{hellevatorStartY}}}}}");
-            sb.AppendLine("}");
-            sb.AppendLine($"  Third action - Mine left tile of next row down:");
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Completed row at Y={hellevatorStartY}, gravity is pulling me down into the cleared shaft\",");
-            sb.AppendLine($"  \"thought\": \"Descend by mining left tile of next row. No move action needed - gravity handles vertical movement.\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX},\"tileY\":{hellevatorStartY + 1}}}}}");
-            sb.AppendLine("}");
-            sb.AppendLine($"  Fourth action - Mine right tile, continue pattern:");
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Mining efficiently in 2-wide shaft, descending steadily row by row\",");
-            sb.AppendLine($"  \"thought\": \"Continue alternating left-right-left-right pattern. System keeps me centered, gravity pulls me down.\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{hellevatorStartX + 1},\"tileY\":{hellevatorStartY + 1}}}}}");
-            sb.AppendLine("}");
-            sb.AppendLine($"  Continue this pattern (mine both tiles per row, descend) until reaching desired depth or obstacle.");
+            sb.AppendLine($"  (hellevator action mines a 3x3 area, keeps you centered on the middle column, reports every 20 blocks, stops at underworld)");
 
             return sb.ToString();
         }

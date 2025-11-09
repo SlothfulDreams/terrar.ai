@@ -72,6 +72,12 @@ namespace TerrarAI.Content.Actions
         /// </summary>
         public virtual Vector2? GetTargetPosition() => null;
 
+        /// <summary>
+        /// Returns true if this action can fail and contribute to the "give up" mechanism.
+        /// Actions that return false will not increment the replan cycle count.
+        /// </summary>
+        public virtual bool CanFailAndGiveUp => true;
+
         protected virtual void OnEnter(AgentActionContext context)
         {
         }
