@@ -17,6 +17,8 @@ namespace TerrarAI.Content.Actions
         private Phase _phase = Phase.CheckingRange;
         private MoveAction? _moveAction;
         private int _damageAccumulated;
+        private int _lastDamageAmount;
+        private int _noProgressTicks;
         private Item? _currentPickaxe;
         private bool _initialized;
         private bool _slowMiningToggle;
@@ -28,6 +30,10 @@ namespace TerrarAI.Content.Actions
             _damageAccumulated = 0;
             _initialized = false;
             _slowMiningToggle = false;
+            _lastDamageAmount = 0;
+            _noProgressTicks = 0;
+            _lastDamageAmount = 0;
+            _noProgressTicks = 0;
             _clusterTiles = BuildClusterTiles(tile);
             _currentTileIndex = 0;
         }
@@ -215,6 +221,22 @@ namespace TerrarAI.Content.Actions
 
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
+
+            # Stall detection: if no progress in ~1.5s, fail fast
+            if (_damageAccumulated == _lastDamageAmount)
+            {
+                _noProgressTicks++;
+                if (_noProgressTicks >= 90)
+                {
+                    string tileName = TileID.Search.GetName(currentTile.TileType);
+                    return AgentActionResult.Failure($"Mining stalled on {tileName} at tile({CurrentTile.X},{CurrentTile.Y}). No progress for 1.5s.");
+                }
+            }
+            else
+            {
+                _noProgressTicks = 0;
+                _lastDamageAmount = _damageAccumulated;
+            }
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)

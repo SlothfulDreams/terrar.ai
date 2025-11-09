@@ -16,6 +16,8 @@ namespace TerrarAI.Content.Actions
         private Phase _phase = Phase.CheckingRange;
         private MoveAction? _moveAction;
         private int _damageAccumulated;
+        private int _lastDamageAmount;
+        private int _noProgressTicks;
         private Item? _currentAxe;
         private bool _initialized;
         private bool _slowChoppingToggle;
@@ -25,6 +27,10 @@ namespace TerrarAI.Content.Actions
             _damageAccumulated = 0;
             _initialized = false;
             _slowChoppingToggle = false;
+            _lastDamageAmount = 0;
+            _noProgressTicks = 0;
+            _lastDamageAmount = 0;
+            _noProgressTicks = 0;
         }
 
         public override string Name => "chop";
@@ -206,6 +212,21 @@ namespace TerrarAI.Content.Actions
             // Calculate chopping damage based on axe power
             int damagePerTick = CalculateChoppingDamage(_currentAxe.axe);
             _damageAccumulated += damagePerTick;
+
+            // Stall detection: if no progress in ~1.5s, fail fast
+            if (_damageAccumulated == _lastDamageAmount)
+            {
+                _noProgressTicks++;
+                if (_noProgressTicks >= 90)
+                {
+                    return AgentActionResult.Failure($"Chopping stalled at tile({Tile.X},{Tile.Y}). No progress for 1.5s.");
+                }
+            }
+            else
+            {
+                _noProgressTicks = 0;
+                _lastDamageAmount = _damageAccumulated;
+            }
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)
