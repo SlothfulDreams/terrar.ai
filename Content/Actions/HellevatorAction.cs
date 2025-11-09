@@ -15,14 +15,13 @@ namespace TerrarAI.Content.Actions
     /// </summary>
     public sealed class HellevatorAction : AgentAction
     {
-        private enum Phase { Initializing, Centering, MiningLeft, MiningMiddle, MiningRight, CheckingDepth }
+        private enum Phase { Initializing, Centering, ClearingLayer, CheckingDepth }
 
         private Phase _phase = Phase.Initializing;
         private int _leftColumnX;
         private int _middleColumnX;
         private int _rightColumnX;
         private float _centerPixelX;
-        private MineAction? _currentMineAction;
         private MoveAction? _centeringMoveAction;
         private bool _initialized;
         private bool _positionInitialized;
@@ -33,6 +32,11 @@ namespace TerrarAI.Content.Actions
         private const int BLOCKS_PER_REPLAN_CHECK = 20; // Report status every 20 blocks mined
         private const int JUMP_COOLDOWN_TICKS = 90; // 1.5 seconds at 60 FPS
         private const float JUMP_CHANCE = 0.3f; // 30% chance to jump when nearby agent detected
+        private const int TILES_PER_TICK = 6; // Faster mining throughput (approx 2.5x speed)
+        private const int LAYER_HEIGHT = 3; // Dig 3 tiles vertically at a time
+
+        private int _nextLayerBaseY;
+        private int _tilesClearedThisLayer;
 
         public HellevatorAction(int startTileX = 0)
         {
@@ -45,6 +49,8 @@ namespace TerrarAI.Content.Actions
             _positionInitialized = startTileX != 0;
             _agentWhoAmI = -1;
             _lastJumpTick = 0;
+            _nextLayerBaseY = -1;
+            _tilesClearedThisLayer = 0;
         }
 
         private void InitializePosition(int startTileX)
@@ -74,27 +80,26 @@ namespace TerrarAI.Content.Actions
 
         public override Point? GetTargetTile()
         {
-            // Return current mining target
-            return _currentMineAction?.GetTargetTile();
+            return null;
         }
 
         public override void Reset()
         {
             base.Reset();
             _phase = Phase.Initializing;
-            _currentMineAction = null;
             _centeringMoveAction = null;
             _initialized = false;
             _positionInitialized = false;
             _blocksMinedSinceLastReport = 0;
             _agentWhoAmI = -1;
             _lastJumpTick = 0;
+            _nextLayerBaseY = -1;
+            _tilesClearedThisLayer = 0;
         }
 
         protected override void OnCancel()
         {
             base.OnCancel();
-            _currentMineAction?.Cancel();
             _centeringMoveAction?.Cancel();
             
             // Release hellevator claim if this agent claimed it
@@ -191,10 +196,16 @@ namespace TerrarAI.Content.Actions
             // Ensure we're centered around the blocks we're breaking
             if (_phase != Phase.Initializing && _phase != Phase.Centering && !IsCentered(npc))
             {
-                _currentMineAction = null;
                 _centeringMoveAction = null;
                 _phase = Phase.Centering;
                 return AgentActionResult.Pending("Off-center, re-centering on middle column...");
+            }
+
+            // Initialize layer tracking once centered
+            if (_nextLayerBaseY < 0)
+            {
+                _nextLayerBaseY = GetCurrentTargetY(npc);
+                _tilesClearedThisLayer = 0;
             }
 
             // Handle phase-based execution
@@ -206,14 +217,8 @@ namespace TerrarAI.Content.Actions
                 case Phase.Centering:
                     return HandleCentering(context);
 
-                case Phase.MiningLeft:
-                    return HandleMining(context, _leftColumnX, Phase.MiningMiddle);
-
-                case Phase.MiningMiddle:
-                    return HandleMining(context, _middleColumnX, Phase.MiningRight);
-
-                case Phase.MiningRight:
-                    return HandleMining(context, _rightColumnX, Phase.CheckingDepth);
+                case Phase.ClearingLayer:
+                    return HandleClearingLayer(context);
 
                 case Phase.CheckingDepth:
                     return HandleCheckingDepth(context);
@@ -227,6 +232,8 @@ namespace TerrarAI.Content.Actions
         {
             // Always center first before breaking any blocks
             _phase = Phase.Centering;
+            _nextLayerBaseY = GetCurrentTargetY(context.Agent);
+            _tilesClearedThisLayer = 0;
             return AgentActionResult.Pending("Centering on middle column before starting hellevator...");
         }
 
@@ -235,8 +242,8 @@ namespace TerrarAI.Content.Actions
             // Check if already centered
             if (IsCentered(context.Agent))
             {
-                _phase = Phase.MiningLeft;
-                return AgentActionResult.Pending("Centered, starting to mine...");
+                _phase = Phase.ClearingLayer;
+                return AgentActionResult.Pending("Centered, starting to clear shaft...");
             }
 
             // Create or continue move action to center
@@ -253,8 +260,8 @@ namespace TerrarAI.Content.Actions
             if (result.Status == AgentActionStatus.Success)
             {
                 _centeringMoveAction = null;
-                _phase = Phase.MiningLeft;
-                return AgentActionResult.Pending("Centered, starting to mine...");
+                _phase = Phase.ClearingLayer;
+                return AgentActionResult.Pending("Centered, starting to clear shaft...");
             }
 
             if (result.Status == AgentActionStatus.Failure)
@@ -266,95 +273,105 @@ namespace TerrarAI.Content.Actions
             return AgentActionResult.Pending($"Centering... ({result.Message})");
         }
 
-        private AgentActionResult HandleMining(AgentActionContext context, int tileX, Phase nextPhase)
+        private AgentActionResult HandleClearingLayer(AgentActionContext context)
         {
-            // Ensure we're still centered before mining
+            // Ensure we're still centered before clearing
             if (!IsCentered(context.Agent))
             {
-                _currentMineAction = null;
+                _centeringMoveAction = null;
                 _phase = Phase.Centering;
                 return AgentActionResult.Pending("Off-center, re-centering...");
             }
 
-            // Always calculate target Y from NPC's current position + 1 tile
-            int currentTargetY = GetCurrentTargetY(context.Agent);
+            int tilesClearedThisTick = 0;
+            bool remainingSolidTiles = false;
+            int baseY = _nextLayerBaseY;
 
-            // Create or continue mine action
-            if (_currentMineAction == null)
+            for (int y = baseY; y < baseY + LAYER_HEIGHT; y++)
             {
-                var targetTile = new Point(tileX, currentTargetY);
-                _currentMineAction = new MineAction(targetTile);
-            }
-
-            var result = _currentMineAction.Tick(context);
-
-            // Always recalculate target Y in case NPC moved (for logging and validation)
-            currentTargetY = GetCurrentTargetY(context.Agent);
-
-            if (result.Status == AgentActionStatus.Success)
-            {
-                _currentMineAction = null;
-                _blocksMinedSinceLastReport++;
-                _phase = nextPhase;
-
-                // Only report status after mining BLOCKS_PER_REPLAN_CHECK blocks
-                if (_blocksMinedSinceLastReport >= BLOCKS_PER_REPLAN_CHECK)
+                if (y < 0 || y >= Main.maxTilesY)
                 {
-                    int blocksReported = _blocksMinedSinceLastReport;
-                    _blocksMinedSinceLastReport = 0;
-                    return AgentActionResult.Pending($"Hellevator: Mined {blocksReported} blocks, continuing to depth Y={currentTargetY}...");
+                    continue;
                 }
 
-                // Continue silently without triggering replan
-                return AgentActionResult.Pending(null); // Null message means don't trigger replan
-            }
-
-            if (result.Status == AgentActionStatus.Failure)
-            {
-                _currentMineAction = null;
-                // Check if tile is unmineable - skip it and continue
-                var tile = Framing.GetTileSafely(tileX, currentTargetY);
-                if (!tile.HasTile || CanMineTile(tile))
+                for (int x = _leftColumnX; x <= _rightColumnX; x++)
                 {
-                    // Try next phase anyway (might be air or already mined)
-                    _phase = nextPhase;
-                    return AgentActionResult.Pending($"Skipping tile({tileX},{currentTargetY}), continuing...");
+                    if (x < 0 || x >= Main.maxTilesX)
+                    {
+                        continue;
+                    }
+
+                    var tile = Framing.GetTileSafely(x, y);
+                    if (!tile.HasTile)
+                    {
+                        continue;
+                    }
+
+                    remainingSolidTiles = true;
+
+                    if (!CanMineTile(tile))
+                    {
+                        string tileName = TileID.Search.GetName(tile.TileType);
+                        return AgentActionResult.Failure($"Encountered unbreakable tile {tileName} at tile({x},{y}).");
+                    }
+
+                    if (tilesClearedThisTick >= TILES_PER_TICK)
+                    {
+                        continue;
+                    }
+
+                    WorldGen.KillTile(x, y, false, false, false);
+                    if (Main.netMode == NetmodeID.Server)
+                    {
+                        NetMessage.SendTileSquare(-1, x, y, 1);
+                    }
+
+                    tilesClearedThisTick++;
+                    _tilesClearedThisLayer++;
+                    _blocksMinedSinceLastReport++;
                 }
-                // For unmineable tiles, try to recover by re-centering and continuing
-                _phase = Phase.Centering;
-                return AgentActionResult.Pending($"Cannot mine tile({tileX},{currentTargetY}), re-centering and continuing...");
             }
 
-            return AgentActionResult.Pending($"Mining tile({tileX},{currentTargetY})... ({result.Message})");
+            if (_blocksMinedSinceLastReport >= BLOCKS_PER_REPLAN_CHECK)
+            {
+                int reported = _blocksMinedSinceLastReport;
+                _blocksMinedSinceLastReport = 0;
+                return AgentActionResult.Pending($"Hellevator: Cleared {reported} tiles, continuing to depth Y={baseY}...");
+            }
+
+            if (remainingSolidTiles)
+            {
+                return AgentActionResult.Pending($"Clearing hellevator shaft at depth Y={baseY}...");
+            }
+
+            // Layer fully cleared; move to next layer and allow NPC to descend
+            _nextLayerBaseY++;
+            _tilesClearedThisLayer = 0;
+            _phase = Phase.CheckingDepth;
+            return AgentActionResult.Pending("Layer cleared, descending...");
         }
 
         private AgentActionResult HandleCheckingDepth(AgentActionContext context)
         {
-            // Both tiles mined for this row, check if we've reached underworld
-            int currentTargetY = GetCurrentTargetY(context.Agent);
-
-            // Check if NPC is touching ash blocks (indicates underworld reached)
+            // Check if hellevator reached underworld
             if (IsTouchingAsh(context.Agent))
             {
-                // Release hellevator claim when complete
                 if (_agentWhoAmI >= 0)
                 {
                     MultiAgentCoordinator.ReleaseHellevator(_agentWhoAmI);
                 }
-                return AgentActionResult.Success($"Reached underworld - touching ash blocks at depth Y={currentTargetY}");
+                return AgentActionResult.Success($"Reached underworld - touching ash blocks at depth Y={GetCurrentTargetY(context.Agent)}");
             }
 
-            // Check if we need to re-center (gravity may have shifted us)
-            if (!IsCentered(context.Agent))
+            int currentBottomTile = (int)(context.Agent.Bottom.Y / 16f);
+            if (currentBottomTile <= _nextLayerBaseY)
             {
-                _phase = Phase.Centering;
-                return AgentActionResult.Pending("Off-center, re-centering before next row...");
+                return AgentActionResult.Pending("Descending to next layer...");
             }
 
-            // Start mining next row (left column)
-            // Don't check counter here - only check in HandleMining to avoid reporting after every row
-            _phase = Phase.MiningLeft;
-            return AgentActionResult.Pending(null); // Continue silently to next row
+            _phase = Phase.ClearingLayer;
+            _tilesClearedThisLayer = 0;
+            return AgentActionResult.Pending(null);
         }
 
         private int GetCurrentTargetY(NPC npc)

@@ -41,11 +41,11 @@ namespace TerrarAI.Content.NPCs
         private string _statusMessage = "Idle";
         private string? _lastPlannerError;
         private Player? _commander;
-        
+
         // Planning retry tracking
         private int _planningRetryCount = 0;
         private const int MAX_PLANNING_RETRIES = 1;
-        
+
         // Action retry tracking
         private long _actionStartTick = 0;
         private int _actionRetryCount = 0;
@@ -149,7 +149,7 @@ namespace TerrarAI.Content.NPCs
         public override void FindFrame(int frameHeight)
         {
             NPC.frameCounter++;
-            
+
             if (Math.Abs(NPC.velocity.X) > 0.1f)
             {
                 // Walking animation - cycle through frames
@@ -157,7 +157,7 @@ namespace TerrarAI.Content.NPCs
                 {
                     NPC.frameCounter = 0;
                     NPC.frame.Y += frameHeight;
-                    
+
                     if (NPC.frame.Y >= Main.npcFrameCount[Type] * frameHeight)
                     {
                         NPC.frame.Y = 0; // Loop back to first frame
@@ -329,7 +329,7 @@ namespace TerrarAI.Content.NPCs
 
             // Reset execution timeout for new command
             _executionStartTick = 0;
-            
+
             // Reset retry counters for new command
             _planningRetryCount = 0;
             _actionRetryCount = 0;
@@ -354,7 +354,7 @@ namespace TerrarAI.Content.NPCs
             _currentAction?.Cancel();
             _currentAction = null;
             _plannerTask = null;  // Cancel any ongoing planning
-            
+
             // Reset state
             _currentCommand = null;
             _replanContext = null;
@@ -369,12 +369,12 @@ namespace TerrarAI.Content.NPCs
             ClearHellevatorState();
             // Release hellevator claim if this agent claimed it
             MultiAgentCoordinator.ReleaseHellevator(NPC.whoAmI);
-            
+
             // Reset retry counters
             _planningRetryCount = 0;
             _actionRetryCount = 0;
             _actionStartTick = 0;
-            
+
             // Set commander and state
             _commander = commander;
             State = AgentState.Idle;
@@ -697,7 +697,7 @@ namespace TerrarAI.Content.NPCs
             catch (ActionParserException ex)
             {
                 Mod.Logger.Error($"[TickPlanning] ActionParserException: {ex.Message}");
-                
+
                 // Retry planning once if we haven't exceeded retry limit
                 if (_planningRetryCount < MAX_PLANNING_RETRIES)
                 {
@@ -707,13 +707,13 @@ namespace TerrarAI.Content.NPCs
                     BeginPlanning();
                     return;
                 }
-                
+
                 HandlePlannerFailure($"Parser error: {ex.Message} (after {MAX_PLANNING_RETRIES + 1} attempts)");
             }
             catch (Exception ex)
             {
                 Mod.Logger.Error($"[TickPlanning] Unexpected exception: {ex}");
-                
+
                 // Retry planning once if we haven't exceeded retry limit
                 if (_planningRetryCount < MAX_PLANNING_RETRIES)
                 {
@@ -723,7 +723,7 @@ namespace TerrarAI.Content.NPCs
                     BeginPlanning();
                     return;
                 }
-                
+
                 HandlePlannerFailure($"Unexpected error: {ex.Message} (after {MAX_PLANNING_RETRIES + 1} attempts)");
             }
         }
@@ -967,7 +967,7 @@ namespace TerrarAI.Content.NPCs
                     long actionElapsedTicks = Main.GameUpdateCount - _actionStartTick;
 
                     // Check if we should retry: action failed after 2 seconds and we haven't retried yet
-                    bool shouldRetry = actionElapsedTicks >= ACTION_RETRY_TIMEOUT_TICKS && 
+                    bool shouldRetry = actionElapsedTicks >= ACTION_RETRY_TIMEOUT_TICKS &&
                                       _actionRetryCount < MAX_ACTION_RETRIES;
 
                     if (shouldRetry)
@@ -1238,7 +1238,7 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("AVAILABLE ACTIONS:");
             sb.AppendLine("- move(tileX, tileY): Move to a tile. Jumps over obstacles and gaps automatically.");
             sb.AppendLine("- chop(tileX, tileY): Chop a tree trunk. Auto-moves to target.");
-            sb.AppendLine("- mine(tileX, tileY): Mine ore/stone. Auto-moves to target.");
+            sb.AppendLine("- mine(tileX, tileY): Mine ore/stone in a 3x3 area centered on the tile. Auto-moves to target first.");
             sb.AppendLine("- hellevator([startX]): Dig a 3x3 tunnel straight down to the underworld. Keeps you centered on the middle column and re-centers if knocked off. Stops at underworld.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
@@ -1279,10 +1279,12 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- Use tile coordinates from YOUR SITUATION (tileX, tileY).");
             sb.AppendLine("- Do NOT use the \"target\" field (e.g., nearest_trees). It is unsupported and will fail.");
             sb.AppendLine("- Check YOUR SITUATION for available resources and player positions before acting.");
-            sb.AppendLine("- mine/chop actions automatically move you close enough.");
+            sb.AppendLine("- Always move into range before mining/chopping/placing. Do NOT rely on auto-movement.");
             sb.AppendLine("- move() jumps over gaps and obstacles automatically.");
             sb.AppendLine("- If movement fails, you'll see the failure reason and can replan.");
             sb.AppendLine("- Return ONLY ONE action per response using the ReAct format.");
+            sb.AppendLine("- Do NOT assume an action succeeded until the observation/result explicitly says so.");
+            sb.AppendLine("- Wait for the next observation before deciding the following step—never chain multiple actions into one reply.");
             sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown.");
             sb.AppendLine("- Use 'complete' action when the task is finished.");
             sb.AppendLine();
@@ -1298,11 +1300,11 @@ namespace TerrarAI.Content.NPCs
             if (_hellevatorMode)
             {
                 sb.AppendLine();
-            sb.AppendLine("⚠️ HELLEVATOR MODE ACTIVE - Use hellevator() action:");
-            sb.AppendLine("- Use hellevator() action - it handles everything automatically");
-            sb.AppendLine("- Mines a 3x3 area, keeps you centered on the middle column, reports every 20 blocks");
-            sb.AppendLine("- Stops automatically when reaching underworld");
-            sb.AppendLine("- DO NOT use individual mine() actions - use hellevator() instead");
+                sb.AppendLine("⚠️ HELLEVATOR MODE ACTIVE - Use hellevator() action:");
+                sb.AppendLine("- Use hellevator() action - it handles everything automatically");
+                sb.AppendLine("- Mines a 3x3 area, keeps you centered on the middle column, reports every 20 blocks");
+                sb.AppendLine("- Stops automatically when reaching underworld");
+                sb.AppendLine("- DO NOT use individual mine() actions - use hellevator() instead");
             }
 
             sb.AppendLine();
@@ -1318,18 +1320,23 @@ namespace TerrarAI.Content.NPCs
             int exampleTargetTileX = agentTileX + 5;
             int exampleTargetTileY = agentTileY;
 
-            sb.AppendLine($"Example 1: Task is \"Mine copper ore\", Ores shows: \"Copper: tile({exampleTargetTileX},{exampleTargetTileY})\"");
+            sb.AppendLine($"Example 1 (Cycle 1 - move into position): Task is \"Mine copper ore\", Ores shows: \"Copper: tile({exampleTargetTileX},{exampleTargetTileY})\"");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Copper at tile({exampleTargetTileX},{exampleTargetTileY})\",");
-            sb.AppendLine($"  \"thought\": \"Mine the copper\",");
+            sb.AppendLine($"  \"observation\": \"Copper at tile({exampleTargetTileX},{exampleTargetTileY}). Currently at tile({agentTileX},{agentTileY}).\",");
+            sb.AppendLine("  \"thought\": \"Move next to the copper before mining.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY - 1}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine("Example 1 (Cycle 2 - after move success):");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Arrived near tile({exampleTargetTileX},{exampleTargetTileY}); copper is within reach.\",");
+            sb.AppendLine("  \"thought\": \"Mine the copper now that I'm in range.\",");
             sb.AppendLine($"  \"action\": {{\"type\":\"mine\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY}}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  (mine action auto-moves, no separate move needed)");
-            sb.AppendLine($"  After mining:");
+            sb.AppendLine("Example 1 (Cycle 3 - after mining success):");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Copper ore mined successfully\",");
-            sb.AppendLine($"  \"thought\": \"Task complete\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"complete\",\"params\":{{\"message\":\"Mined copper ore\"}}}}");
+            sb.AppendLine("  \"observation\": \"Copper ore mined successfully.\",");
+            sb.AppendLine("  \"thought\": \"Task complete.\",");
+            sb.AppendLine("  \"action\": {\"type\":\"complete\",\"params\":{\"message\":\"Mined copper ore\"}}");
             sb.AppendLine("}");
             sb.AppendLine();
             sb.AppendLine($"Example 2: Task is \"Go to tile(100,50)\"");
@@ -1345,14 +1352,19 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"tileX\":80,\"tileY\":55}}}}");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine($"Example 3: Task is \"Chop trees\", Trees shows: \"Tree: tile({exampleTargetTileX},{exampleTargetTileY})\"");
+            sb.AppendLine($"Example 3 (Cycle 1 - move to tree): Task is \"Chop trees\", Trees shows: \"Tree: tile({exampleTargetTileX},{exampleTargetTileY})\"");
             sb.AppendLine("{");
             sb.AppendLine($"  \"observation\": \"Tree at tile({exampleTargetTileX},{exampleTargetTileY})\",");
-            sb.AppendLine($"  \"thought\": \"Chop the tree\",");
+            sb.AppendLine("  \"thought\": \"Move next to the trunk before chopping.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"move\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY - 1}}}}}");
+            sb.AppendLine("}");
+            sb.AppendLine("Example 3 (Cycle 2 - after move success):");
+            sb.AppendLine("{");
+            sb.AppendLine($"  \"observation\": \"Standing next to tree trunk at tile({exampleTargetTileX},{exampleTargetTileY}).\",");
+            sb.AppendLine("  \"thought\": \"Chop the trunk now that I'm in range.\",");
             sb.AppendLine($"  \"action\": {{\"type\":\"chop\",\"params\":{{\"tileX\":{exampleTargetTileX},\"tileY\":{exampleTargetTileY}}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  (chop action auto-moves, no separate move needed)");
-            sb.AppendLine($"  After chopping:");
+            sb.AppendLine("Example 3 (Later cycle after tree is chopped):");
             sb.AppendLine("{");
             sb.AppendLine($"  \"observation\": \"Tree chopped successfully\",");
             sb.AppendLine($"  \"thought\": \"Task complete\",");
@@ -1367,14 +1379,25 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("}");
             sb.AppendLine();
 
-            // Example 4: Hellevator digging
-            sb.AppendLine($"Example 4: Task is \"dig me a hellevator\"");
+            // Example 5: Hellevator digging
+            sb.AppendLine($"Example 5 (Cycle 1 - start hellevator): Task is \"dig me a hellevator\"");
             sb.AppendLine("{");
-            sb.AppendLine($"  \"observation\": \"Need to dig a hellevator to the underworld\",");
-            sb.AppendLine($"  \"thought\": \"Use hellevator action - it handles everything automatically\",");
-            sb.AppendLine($"  \"action\": {{\"type\":\"hellevator\",\"params\":{{}}}}");
+            sb.AppendLine($"  \"observation\": \"Need to dig a hellevator to the underworld. Standing at surface tile({agentTileX},{agentTileY}).\",");
+            sb.AppendLine($"  \"thought\": \"Start hellevator automation so it mines a 3x3 shaft and keeps me centered.\",");
+            sb.AppendLine($"  \"action\": {{\"type\":\"hellevator\",\"params\":{{\"startX\":{agentTileX}}}}}");
             sb.AppendLine("}");
-            sb.AppendLine($"  (hellevator action mines a 3x3 area, keeps you centered on the middle column, reports every 20 blocks, stops at underworld)");
+            sb.AppendLine("Example 5 (Later cycle while hellevator running):");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"observation\": \"Hellevator digging progressed 20 blocks; shaft centered and clear.\",");
+            sb.AppendLine("  \"thought\": \"Continue hellevator to keep the shaft consistent.\",");
+            sb.AppendLine("  \"action\": {\"type\":\"hellevator\",\"params\":{}}");
+            sb.AppendLine("}");
+            sb.AppendLine("Example 5 (Completion cycle):");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"observation\": \"Hellevator reached the underworld; shaft is complete.\",");
+            sb.AppendLine("  \"thought\": \"Task complete.\",");
+            sb.AppendLine("  \"action\": {\"type\":\"complete\",\"params\":{\"message\":\"Finished hellevator\"}}");
+            sb.AppendLine("}");
 
             return sb.ToString();
         }
