@@ -1366,12 +1366,21 @@ namespace TerrarAI.Content.NPCs
             }
 
             // Calculate commander's HP share
-            int commanderMaxHP = _commander?.statLifeMax2 / (totalAgentCount + 1) ?? 0;
+            int commanderMaxHP = totalAgentCount > 0
+                ? (_commander?.statLifeMax2 / totalAgentCount ?? 0)
+                : (_commander?.statLifeMax2 ?? 0);
 
             sb.AppendLine($"- Active Agents: {totalAgentCount} total in the world");
             if (_commander != null)
             {
-                sb.AppendLine($"- Commander HP: {_commander.statLife}/{commanderMaxHP} (shared among {totalAgentCount + 1} entities)");
+                if (totalAgentCount > 0)
+                {
+                    sb.AppendLine($"- Commander HP: {_commander.statLife}/{commanderMaxHP} (divided among {totalAgentCount} agents)");
+                }
+                else
+                {
+                    sb.AppendLine($"- Commander HP: {_commander.statLife}/{_commander.statLifeMax2} (full HP, no agents)");
+                }
             }
 
             // Add hellevator state when active
@@ -1412,8 +1421,8 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("⚠️ AGENT SELECTION & HP SHARING:");
             sb.AppendLine("- When commander says 'N agents do X', the system selects the N closest agents to the commander.");
             sb.AppendLine("- You may or may not be selected depending on your proximity to the commander.");
-            sb.AppendLine("- HP Sharing: Commander's max HP = statLifeMax2 / (totalAgents + 1). More agents = less HP for everyone.");
-            sb.AppendLine("- Be aware: Having many agents weakens the commander. Complete tasks efficiently to minimize risk.");
+            sb.AppendLine("- HP Sharing: Commander's max HP = statLifeMax2 / totalAgents (or full HP if no agents exist).");
+            sb.AppendLine("- More agents = less HP for commander. Complete tasks efficiently to minimize risk.");
             sb.AppendLine();
             sb.AppendLine("⚠️ TARGET LOCKING RULE:");
             sb.AppendLine("- If you see '⚠️ CURRENT TARGET' in Nearby Resources, you MUST continue mining that exact target.");

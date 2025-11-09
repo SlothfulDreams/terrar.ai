@@ -342,7 +342,7 @@ The system will select the N closest agents to the player for tasks with agentCo
                 SpawnAgentAtPosition(spawnPos, name, new EntitySource_WorldGen(), 73);
             }
 
-            caller.Reply($"Spawned {count} agent(s). Soul split into {count + 1} pieces.", Color.LightGreen);
+            caller.Reply($"Spawned {count} agent(s). Soul split into {count} pieces.", Color.LightGreen);
         }
 
         private static void DeleteAllAgents(CommandCaller caller)

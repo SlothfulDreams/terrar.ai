@@ -11,11 +11,11 @@ namespace TerrarAI.Content.Players
             int agentCount = CountActiveAgents();
             if (agentCount == 0)
             {
-                return;
+                return;  // No HP division when no agents exist
             }
 
-            int totalShares = agentCount + 1;
-            int maxAllowedLife = Player.statLifeMax2 / totalShares;
+            // Divide HP by number of agents only (not including player)
+            int maxAllowedLife = Player.statLifeMax2 / agentCount;
 
             if (Player.statLife > maxAllowedLife)
             {
@@ -38,4 +38,3 @@ namespace TerrarAI.Content.Players
         }
     }
 }
-
