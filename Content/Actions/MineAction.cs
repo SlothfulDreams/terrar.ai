@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
 using TerrarAI.Content.NPCs;
@@ -19,12 +20,16 @@ namespace TerrarAI.Content.Actions
         private Item? _currentPickaxe;
         private bool _initialized;
         private bool _slowMiningToggle;
+        private readonly List<Point> _clusterTiles;
+        private int _currentTileIndex;
 
         public MineAction(Point tile) : base(tile)
         {
             _damageAccumulated = 0;
             _initialized = false;
             _slowMiningToggle = false;
+            _clusterTiles = BuildClusterTiles(tile);
+            _currentTileIndex = 0;
         }
 
         public override string Name => "mine";
@@ -43,6 +48,7 @@ namespace TerrarAI.Content.Actions
             _currentPickaxe = null;
             _initialized = false;
             _slowMiningToggle = false;
+            _currentTileIndex = 0;
         }
 
         protected override void OnCancel()
@@ -77,7 +83,7 @@ namespace TerrarAI.Content.Actions
 
         private AgentActionResult HandleCheckingRange(AgentActionContext context)
         {
-            var targetPos = GetTileWorldCenter();
+            var targetPos = GetCurrentTileWorldCenter();
             var distance = Vector2.Distance(context.Agent.Center, targetPos);
 
             if (distance <= GetRequiredRange())
@@ -89,7 +95,7 @@ namespace TerrarAI.Content.Actions
             else
             {
                 // Need to move closer first
-                var targetTile = new Point((int)(targetPos.X / 16f), (int)(targetPos.Y / 16f));
+                var targetTile = CurrentTile;
                 _moveAction = new MoveAction(targetTile);
                 _phase = Phase.MovingToTarget;
                 return AgentActionResult.Pending($"Target {distance:F0}px away, moving closer first...");
@@ -154,10 +160,10 @@ namespace TerrarAI.Content.Actions
                 context.Agent.velocity.Y *= 0.9f;
 
                 // Check if tile exists
-                var tile = Framing.GetTileSafely(Tile.X, Tile.Y);
+                var tile = Framing.GetTileSafely(CurrentTile.X, CurrentTile.Y);
                 if (!tile.HasTile)
                 {
-                    return AgentActionResult.Success($"Tile {Tile.X},{Tile.Y} already empty.");
+                    return CompleteCurrentTileSuccess($"Tile {CurrentTile.X},{CurrentTile.Y} already empty.");
                 }
 
                 // Find best pickaxe from commander's inventory
@@ -180,7 +186,7 @@ namespace TerrarAI.Content.Actions
             }
 
             // POSITION VALIDATION: Verify agent hasn't drifted out of range
-            var targetPos = GetTileWorldCenter();
+            var targetPos = GetCurrentTileWorldCenter();
             var currentDistance = Vector2.Distance(context.Agent.Center, targetPos);
 
             if (currentDistance > GetRequiredRange())
@@ -194,45 +200,50 @@ namespace TerrarAI.Content.Actions
             context.Agent.velocity.Y *= 0.95f;  // Gentle Y dampening
 
             // Check if tile still exists
-            var currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
+            var currentTile = Framing.GetTileSafely(CurrentTile.X, CurrentTile.Y);
             if (!currentTile.HasTile)
             {
-                return AgentActionResult.Success($"Mined tile at {Tile.X},{Tile.Y}");
+                return CompleteCurrentTileSuccess($"Tile {CurrentTile.X},{CurrentTile.Y} already empty.");
             }
 
             // Calculate mining damage based on pickaxe power
             // Higher pickaxe power = faster mining
+            if (_currentPickaxe == null)
+            {
+                return AgentActionResult.Failure("Pickaxe became unavailable during mining.");
+            }
+
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)
             {
-                WorldGen.KillTile(Tile.X, Tile.Y, false, false, false);
+                WorldGen.KillTile(CurrentTile.X, CurrentTile.Y, false, false, false);
 
                 // Sync tile change in multiplayer
                 if (Main.netMode == NetmodeID.Server)
                 {
-                    NetMessage.SendTileSquare(-1, Tile.X, Tile.Y, 1);
+                    NetMessage.SendTileSquare(-1, CurrentTile.X, CurrentTile.Y, 1);
                 }
 
                 // Verify tile was destroyed
                 string tileNameBeforeDestroy = TileID.Search.GetName(currentTile.TileType);
-                currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
+                currentTile = Framing.GetTileSafely(CurrentTile.X, CurrentTile.Y);
                 if (!currentTile.HasTile)
                 {
-                    return AgentActionResult.Success($"Successfully mined {tileNameBeforeDestroy} at tile({Tile.X},{Tile.Y}) using {_currentPickaxe.Name}");
+                    return CompleteCurrentTileSuccess($"Successfully mined {tileNameBeforeDestroy} at tile({CurrentTile.X},{CurrentTile.Y}) using {_currentPickaxe.Name}");
                 }
                 else
                 {
-                    return AgentActionResult.Failure($"Failed to destroy {tileNameBeforeDestroy} at tile({Tile.X},{Tile.Y}). Tile may be protected or require different tool.");
+                    return AgentActionResult.Failure($"Failed to destroy {tileNameBeforeDestroy} at tile({CurrentTile.X},{CurrentTile.Y}). Tile may be protected or require different tool.");
                 }
             }
 
             // Still mining - show progress with tile name
             int progressPercent = _damageAccumulated;
             string currentTileName = TileID.Search.GetName(currentTile.TileType);
-            return AgentActionResult.Pending($"Mining {currentTileName} at tile({Tile.X},{Tile.Y})... ({progressPercent}%)");
+            return AgentActionResult.Pending($"Mining {currentTileName} at tile({CurrentTile.X},{CurrentTile.Y})... ({progressPercent}%) (3x3 cluster)");
         }
 
         /// <summary>
@@ -279,6 +290,73 @@ namespace TerrarAI.Content.Actions
             var tileY = ActionParameterReader.ReadInt(parameters, "tileY");
             var clamped = validator.ClampTilePosition(tileX, tileY);
             return new MineAction(clamped);
+        }
+
+        public override Point? GetTargetTile() => CurrentTile;
+
+        private static List<Point> BuildClusterTiles(Point center)
+        {
+            var tiles = new List<Point>(9);
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    tiles.Add(new Point(center.X + dx, center.Y + dy));
+                }
+            }
+
+            tiles.Sort((a, b) =>
+            {
+                int priA = Math.Abs(a.X - center.X) + Math.Abs(a.Y - center.Y);
+                int priB = Math.Abs(b.X - center.X) + Math.Abs(b.Y - center.Y);
+                if (priA != priB)
+                {
+                    return priA.CompareTo(priB);
+                }
+
+                // Tie-breaker: prefer lower Y (higher on screen), then lower X
+                if (a.Y != b.Y)
+                {
+                    return a.Y.CompareTo(b.Y);
+                }
+                return a.X.CompareTo(b.X);
+            });
+
+            return tiles;
+        }
+
+        private Point CurrentTile => _clusterTiles[_currentTileIndex];
+
+        private Vector2 GetCurrentTileWorldCenter()
+        {
+            return new Vector2(CurrentTile.X * 16f + 8f, CurrentTile.Y * 16f + 8f);
+        }
+
+        private AgentActionResult CompleteCurrentTileSuccess(string message)
+        {
+            if (AdvanceToNextTile())
+            {
+                return AgentActionResult.Pending($"{message} Continuing 3x3 cluster at tile({CurrentTile.X},{CurrentTile.Y}).");
+            }
+
+            return AgentActionResult.Success(message);
+        }
+
+        private bool AdvanceToNextTile()
+        {
+            if (_currentTileIndex >= _clusterTiles.Count - 1)
+            {
+                return false;
+            }
+
+            _currentTileIndex++;
+            _phase = Phase.CheckingRange;
+            _moveAction = null;
+            _damageAccumulated = 0;
+            _currentPickaxe = null;
+            _initialized = false;
+            _slowMiningToggle = false;
+            return true;
         }
     }
 }

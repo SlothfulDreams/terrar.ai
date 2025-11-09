@@ -24,10 +24,10 @@ namespace TerrarAI.Content.Systems
                 {
                     Speed = speed,
                     BaseTolerance = tolerance,
-                    MaxFrames = 600,
-                    MaxStagnantFrames = 120,
+                    MaxFrames = 120, // ~2 seconds at 60 FPS before timing out
+                    MaxStagnantFrames = 60, // ~1 second of no progress before declaring stall
                     ProgressThreshold = 0.5f,
-                    ToleranceStepInterval = 120,
+                    ToleranceStepInterval = 60,
                     ToleranceStep = 8f
                 };
             }
@@ -159,19 +159,19 @@ namespace TerrarAI.Content.Systems
 
             // Proactive obstacle and gap detection
             bool movingHorizontally = Math.Abs(npc.velocity.X) > 0.5f;
-            
+
             if (onGround && movingHorizontally && moveDirection != 0)
             {
                 bool obstacleAhead = HasObstacleAhead(npc, moveDirection, 20);
                 bool gapAhead = HasGapAhead(npc, moveDirection, 24);
-                
+
                 // Get jump multiplier from agent if available (for varied jump heights)
                 float jumpMultiplier = 1f;
                 if (npc.ModNPC is AIAgentNPC agent)
                 {
                     jumpMultiplier = agent.GetJumpMultiplier();
                 }
-                
+
                 if (obstacleAhead)
                 {
                     // Jump over obstacle
@@ -183,7 +183,7 @@ namespace TerrarAI.Content.Systems
                     TryJump(npc, moveDirection, 0f, jumpMultiplier);
                 }
             }
-            
+
             // Fallback: jump when stuck (backup safety)
             int stuckThreshold = Math.Max(20, settings.MaxStagnantFrames / 3);
             bool stuck = movingHorizontally && onGround && state.StagnantFrames > stuckThreshold;
