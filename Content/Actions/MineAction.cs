@@ -222,7 +222,7 @@ namespace TerrarAI.Content.Actions
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
 
-            # Stall detection: if no progress in ~1.5s, fail fast
+            // Stall detection: if no progress in ~1.5s, fail fast
             if (_damageAccumulated == _lastDamageAmount)
             {
                 _noProgressTicks++;
