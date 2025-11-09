@@ -19,17 +19,12 @@ namespace TerrarAI.Content.Actions
         private Item? _currentAxe;
         private bool _initialized;
         private bool _slowChoppingToggle;
-        private int _lastProgressCheckTick;
-        private int _lastDamageAmount;
-        private const int PROGRESS_CHECK_INTERVAL = 120; // 2 seconds
 
         public ChopAction(Point tile) : base(tile)
         {
             _damageAccumulated = 0;
             _initialized = false;
             _slowChoppingToggle = false;
-            _lastProgressCheckTick = 0;
-            _lastDamageAmount = 0;
         }
 
         public override string Name => "chop";
@@ -48,8 +43,6 @@ namespace TerrarAI.Content.Actions
             _currentAxe = null;
             _initialized = false;
             _slowChoppingToggle = false;
-            _lastProgressCheckTick = 0;
-            _lastDamageAmount = 0;
         }
 
         protected override void OnCancel()
@@ -213,28 +206,6 @@ namespace TerrarAI.Content.Actions
             // Calculate chopping damage based on axe power
             int damagePerTick = CalculateChoppingDamage(_currentAxe.axe);
             _damageAccumulated += damagePerTick;
-
-            // Progress validation: Detect if chopping is stalled (no progress for 2 seconds)
-            if (_damageAccumulated > 0 && _damageAccumulated % 30 == 0)
-            {
-                if (_damageAccumulated == _lastDamageAmount)
-                {
-                    // No progress since last check
-                    _lastProgressCheckTick++;
-                    if (_lastProgressCheckTick >= PROGRESS_CHECK_INTERVAL / 30)
-                    {
-                        return AgentActionResult.Failure(
-                            $"Chopping stalled at {_damageAccumulated}% for {PROGRESS_CHECK_INTERVAL / 60f:F1}s. " +
-                            $"Tree may be protected or axe power insufficient.");
-                    }
-                }
-                else
-                {
-                    // Progress detected, reset stall counter
-                    _lastProgressCheckTick = 0;
-                    _lastDamageAmount = _damageAccumulated;
-                }
-            }
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)

@@ -41,6 +41,16 @@ namespace TerrarAI.Content.NPCs
         private string _statusMessage = "Idle";
         private string? _lastPlannerError;
         private Player? _commander;
+        
+        // Planning retry tracking
+        private int _planningRetryCount = 0;
+        private const int MAX_PLANNING_RETRIES = 1;
+        
+        // Action retry tracking
+        private long _actionStartTick = 0;
+        private int _actionRetryCount = 0;
+        private const int MAX_ACTION_RETRIES = 1;
+        private const int ACTION_RETRY_TIMEOUT_TICKS = 120; // 2 seconds at 60 FPS
         private bool _hellevatorMode;
         private int? _hellevatorColumnLeft;
         private float? _hellevatorCenterPixelX;
@@ -60,8 +70,6 @@ namespace TerrarAI.Content.NPCs
 
         // Execution timeout tracking
         private long _executionStartTick;
-        private long _maxExecutionTicks;
-        private const int MAX_EXECUTION_SECONDS = 120; // 2 minutes per command
 
         // Follower AI - Teleportation and stuck detection
         private int _stuckTimer = 0;
@@ -290,13 +298,65 @@ namespace TerrarAI.Content.NPCs
 
             // Reset execution timeout for new command
             _executionStartTick = 0;
-            _maxExecutionTicks = 0;
+            
+            // Reset retry counters for new command
+            _planningRetryCount = 0;
+            _actionRetryCount = 0;
+            _actionStartTick = 0;
 
             State = AgentState.Planning;
             UpdateStatus("Planning...");
 
             NPC.TargetClosest();
             BeginPlanning();
+        }
+
+        public void RecallToCommander(Player? commander)
+        {
+            if (!ServerAuthority.IsServer)
+            {
+                return;
+            }
+
+            // Stop all current tasks
+            _actionQueue.Clear();
+            _currentAction?.Cancel();
+            _currentAction = null;
+            _plannerTask = null;  // Cancel any ongoing planning
+            
+            // Reset state
+            _currentCommand = null;
+            _replanContext = null;
+            _previousActionResult = null;
+            _replanCycleCount = 0;
+            _conversationHistory.Clear();
+            _lastPlannerError = null;
+            _hellevatorMode = false;
+            _hellevatorColumnLeft = null;
+            _hellevatorCenterPixelX = null;
+            ClearTargetLock();
+            ClearHellevatorState();
+            
+            // Reset retry counters
+            _planningRetryCount = 0;
+            _actionRetryCount = 0;
+            _actionStartTick = 0;
+            
+            // Set commander and state
+            _commander = commander;
+            State = AgentState.Idle;
+            UpdateStatus("Recalled to commander");
+
+            // Teleport to commander
+            if (commander != null && commander.active && !commander.dead)
+            {
+                TeleportToPlayer(commander);
+                SendChatMessage($"Recalled to {commander.name}", Color.LightGreen);
+            }
+            else
+            {
+                SendChatMessage("Recalled, but commander not found", Color.Orange);
+            }
         }
 
         private AgentState State
@@ -594,19 +654,44 @@ namespace TerrarAI.Content.NPCs
                 QueueActions(actions);
                 State = AgentState.Executing;
                 _executionStartTick = Main.GameUpdateCount;  // Track when execution started
+                _actionStartTick = Main.GameUpdateCount;  // Track when current action started
+                _actionRetryCount = 0;  // Reset action retry count
                 UpdateStatus("Executing plan...");
                 SendChatMessage($"Planning complete! Executing {actions.Count} action(s).", Color.LightGreen);
                 Mod.Logger.Info($"[TickPlanning] Successfully transitioned to Executing state with {actions.Count} actions");
+                _planningRetryCount = 0;  // Reset planning retry on success
             }
             catch (ActionParserException ex)
             {
                 Mod.Logger.Error($"[TickPlanning] ActionParserException: {ex.Message}");
-                HandlePlannerFailure($"Parser error: {ex.Message}");
+                
+                // Retry planning once if we haven't exceeded retry limit
+                if (_planningRetryCount < MAX_PLANNING_RETRIES)
+                {
+                    _planningRetryCount++;
+                    Mod.Logger.Info($"[TickPlanning] Retrying planning (attempt {_planningRetryCount}/{MAX_PLANNING_RETRIES + 1}) due to parse error");
+                    _plannerTask = null;  // Clear task to trigger new planning
+                    BeginPlanning();
+                    return;
+                }
+                
+                HandlePlannerFailure($"Parser error: {ex.Message} (after {MAX_PLANNING_RETRIES + 1} attempts)");
             }
             catch (Exception ex)
             {
                 Mod.Logger.Error($"[TickPlanning] Unexpected exception: {ex}");
-                HandlePlannerFailure($"Unexpected error: {ex.Message}");
+                
+                // Retry planning once if we haven't exceeded retry limit
+                if (_planningRetryCount < MAX_PLANNING_RETRIES)
+                {
+                    _planningRetryCount++;
+                    Mod.Logger.Info($"[TickPlanning] Retrying planning (attempt {_planningRetryCount}/{MAX_PLANNING_RETRIES + 1}) due to error");
+                    _plannerTask = null;  // Clear task to trigger new planning
+                    BeginPlanning();
+                    return;
+                }
+                
+                HandlePlannerFailure($"Unexpected error: {ex.Message} (after {MAX_PLANNING_RETRIES + 1} attempts)");
             }
         }
 
@@ -623,60 +708,7 @@ namespace TerrarAI.Content.NPCs
 
         private void TickExecuting()
         {
-            // Initialize execution timeout on first tick
-            if (_executionStartTick == 0)
-            {
-                _executionStartTick = Main.GameUpdateCount;
-                _maxExecutionTicks = MAX_EXECUTION_SECONDS * 60;
-            }
-
-            // Check for execution timeout (global safety net)
-            long elapsedTicks = Main.GameUpdateCount - _executionStartTick;
-            if (elapsedTicks > _maxExecutionTicks)
-            {
-                // Force failure and transition to replanning
-                Mod.Logger.Warn($"[TickExecuting] Execution timed out after {MAX_EXECUTION_SECONDS}s");
-
-                _currentAction?.Reset();
-                _currentAction = null;
-                _actionQueue.Clear();
-
-                _replanContext = $"Action execution timed out after {MAX_EXECUTION_SECONDS}s. Task may be impossible or stuck.";
-                State = AgentState.Replanning;
-                UpdateStatus("Execution timeout, replanning...");
-                SendChatMessage($"Action took too long ({MAX_EXECUTION_SECONDS}s), trying different approach.", Color.Orange);
-                return;
-            }
-
             Mod.Logger.Info($"[TickExecuting] Entry - _currentAction={((_currentAction == null) ? "null" : _currentAction.Name)}, queueCount={_actionQueue.Count}");
-
-            // Check execution timeout - if executing same task for more than 5 seconds, replan
-            // Exclude HellevatorAction from timeout since it's a long-running task that reports progress
-            if (_executionStartTick > 0)
-            {
-                long executionTicks = Main.GameUpdateCount - _executionStartTick;
-                
-                if (_currentAction is not HellevatorAction)
-                {
-                    // Standard timeout for other actions
-                    if (executionTicks >= EXECUTION_TIMEOUT_TICKS)
-                    {
-                        Mod.Logger.Info($"[TickExecuting] Execution timeout after {executionTicks} ticks, triggering replan");
-                        _actionQueue.Clear();
-                        _currentAction?.Reset();
-                        _currentAction = null;
-                        _replanContext = $"Execution timeout after 5 seconds. Task may be stuck.";
-                        State = AgentState.Replanning;
-                        UpdateStatus("Execution timeout, replanning...");
-                        
-                        if (_plannerTask == null)
-                        {
-                            BeginPlanning();
-                        }
-                        return;
-                    }
-                }
-            }
 
             if (_currentAction == null)
             {
@@ -691,6 +723,8 @@ namespace TerrarAI.Content.NPCs
                 _currentAction = _actionQueue.Dequeue();
                 Mod.Logger.Info($"[TickExecuting] Dequeued action: {_currentAction.Name}");
                 _currentAction.Reset();
+                _actionStartTick = Main.GameUpdateCount;  // Track when this action started
+                _actionRetryCount = 0;  // Reset retry count for new action
                 UpdateStatus($"Executing {_currentAction.Name}...");
 
                 // TARGET LOCKING: Lock onto first ChopAction or MineAction target to prevent switching
@@ -877,6 +911,22 @@ namespace TerrarAI.Content.NPCs
                     break;
                 case AgentActionStatus.Failure:
                     var failureReason = result.Message ?? "Action failed.";
+                    long actionElapsedTicks = Main.GameUpdateCount - _actionStartTick;
+
+                    // Check if we should retry: action failed after 2 seconds and we haven't retried yet
+                    bool shouldRetry = actionElapsedTicks >= ACTION_RETRY_TIMEOUT_TICKS && 
+                                      _actionRetryCount < MAX_ACTION_RETRIES;
+
+                    if (shouldRetry)
+                    {
+                        _actionRetryCount++;
+                        Mod.Logger.Info($"[TickExecuting] Action failed after {actionElapsedTicks} ticks ({actionElapsedTicks / 60f:F1}s). Retrying (attempt {_actionRetryCount}/{MAX_ACTION_RETRIES + 1})");
+                        _currentAction.Reset();
+                        _actionStartTick = Main.GameUpdateCount;  // Reset start time for retry
+                        UpdateStatus($"Retrying {_currentAction.Name}... (attempt {_actionRetryCount}/{MAX_ACTION_RETRIES + 1})");
+                        SendChatMessage($"Action failed, retrying once...", Color.Orange);
+                        break;  // Continue with retry next tick
+                    }
 
                     // Check if failure is due to unreachable target
                     bool isUnreachableFailure = failureReason.Contains("out of range", StringComparison.OrdinalIgnoreCase) ||
@@ -889,10 +939,18 @@ namespace TerrarAI.Content.NPCs
                         ClearTargetLock();
                     }
 
+                    // Retry exhausted or failure before timeout - replan
+                    if (_actionRetryCount >= MAX_ACTION_RETRIES)
+                    {
+                        Mod.Logger.Info($"[TickExecuting] Action failed after {MAX_ACTION_RETRIES + 1} attempts, replanning");
+                        SendChatMessage($"Action failed after retry, replanning...", Color.Orange);
+                    }
+
                     _currentAction.Reset();
                     _currentAction = null;
                     _actionQueue.Clear();
                     ClearHellevatorState();  // Clear hellevator state on failure
+                    _actionRetryCount = 0;  // Reset retry count
 
                     _replanContext = failureReason;
                     State = AgentState.Replanning;
@@ -1018,6 +1076,7 @@ namespace TerrarAI.Content.NPCs
         private void HandlePlannerFailure(string error)
         {
             _plannerTask = null;
+            _planningRetryCount = 0;  // Reset retry count on final failure
             _lastPlannerError = error;
             State = AgentState.Completed;
             UpdateStatus($"Planner error: {error}");

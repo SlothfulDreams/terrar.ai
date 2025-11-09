@@ -122,6 +122,13 @@ namespace TerrarAI.Content.Systems
                 return;
             }
 
+            // Check for recall command
+            if (IsRecallCommand(text))
+            {
+                RecallAllAgents(player, caller);
+                return;
+            }
+
             var playerIndex = player.whoAmI;
             var prompt = BuildUserPrompt(player, text);
 
@@ -136,9 +143,54 @@ namespace TerrarAI.Content.Systems
                         return;
                     }
 
+                    // Check again for recall in LLM response
+                    if (IsRecallCommand(response))
+                    {
+                        RecallAllAgents(livePlayer, caller);
+                        return;
+                    }
+
                     ApplyCoordinatorResponse(caller, text, response);
                 });
             });
+        }
+
+        internal static bool IsRecallCommand(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var lowerText = text.ToLowerInvariant();
+            return lowerText == "recall" ||
+                   lowerText.Contains("come back") ||
+                   lowerText.Contains("return to me") ||
+                   lowerText.Contains("come to me") ||
+                   lowerText.Contains("come here") ||
+                   lowerText.Contains("teleport to me");
+        }
+
+        internal static void RecallAllAgents(Player commander, CommandCaller caller)
+        {
+            int recalledCount = 0;
+            foreach (var npc in EnumerateAgents())
+            {
+                if (npc.ModNPC is AIAgentNPC agent)
+                {
+                    agent.RecallToCommander(commander);
+                    recalledCount++;
+                }
+            }
+
+            if (recalledCount > 0)
+            {
+                caller.Reply($"Recalled {recalledCount} agent(s) to your position.", Color.LightGreen);
+            }
+            else
+            {
+                caller.Reply("No agents available to recall.", Color.OrangeRed);
+            }
         }
 
         internal static void RouteTool(CommandCaller caller, string commandText)
@@ -248,6 +300,17 @@ namespace TerrarAI.Content.Systems
             if (string.IsNullOrWhiteSpace(commandText))
             {
                 caller.Reply("Usage: /ai <instruction>", Color.LightGray);
+                return;
+            }
+
+            // Handle recall command directly
+            if (ChatCoordinator.IsRecallCommand(commandText))
+            {
+                var player = caller.Player;
+                if (player != null)
+                {
+                    ChatCoordinator.RecallAllAgents(player, caller);
+                }
                 return;
             }
 

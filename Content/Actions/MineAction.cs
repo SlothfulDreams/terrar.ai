@@ -19,17 +19,12 @@ namespace TerrarAI.Content.Actions
         private Item? _currentPickaxe;
         private bool _initialized;
         private bool _slowMiningToggle;
-        private int _lastProgressCheckTick;
-        private int _lastDamageAmount;
-        private const int PROGRESS_CHECK_INTERVAL = 120; // 2 seconds
 
         public MineAction(Point tile) : base(tile)
         {
             _damageAccumulated = 0;
             _initialized = false;
             _slowMiningToggle = false;
-            _lastProgressCheckTick = 0;
-            _lastDamageAmount = 0;
         }
 
         public override string Name => "mine";
@@ -48,8 +43,6 @@ namespace TerrarAI.Content.Actions
             _currentPickaxe = null;
             _initialized = false;
             _slowMiningToggle = false;
-            _lastProgressCheckTick = 0;
-            _lastDamageAmount = 0;
         }
 
         protected override void OnCancel()
@@ -211,29 +204,6 @@ namespace TerrarAI.Content.Actions
             // Higher pickaxe power = faster mining
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
-
-            // Progress validation: Detect if mining is stalled (no progress for 2 seconds)
-            if (_damageAccumulated > 0 && _damageAccumulated % 30 == 0)
-            {
-                if (_damageAccumulated == _lastDamageAmount)
-                {
-                    // No progress since last check
-                    _lastProgressCheckTick++;
-                    if (_lastProgressCheckTick >= PROGRESS_CHECK_INTERVAL / 30)
-                    {
-                        string tileName = TileID.Search.GetName(currentTile.TileType);
-                        return AgentActionResult.Failure(
-                            $"Mining stalled at {_damageAccumulated}% for {PROGRESS_CHECK_INTERVAL / 60f:F1}s. " +
-                            $"Tile '{tileName}' may be protected or pickaxe power insufficient.");
-                    }
-                }
-                else
-                {
-                    // Progress detected, reset stall counter
-                    _lastProgressCheckTick = 0;
-                    _lastDamageAmount = _damageAccumulated;
-                }
-            }
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)
