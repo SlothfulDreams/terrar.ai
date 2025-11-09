@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Xna.Framework;
@@ -67,40 +68,47 @@ namespace TerrarAI.Content.Systems
             }
 
             int baseY = basePos.Value.Y;
-            int leftmost = basePos.Value.X;
-            int rightmost = basePos.Value.X;
+            int centerX = basePos.Value.X;
+            int bestHeight = MeasureTrunkHeight(basePos.Value.X, baseY);
 
-            // Step 2: Scan left to find the leftmost trunk tile at base level
-            // Trees can be up to 3 tiles wide, so check up to 2 tiles left
-            for (int x = basePos.Value.X - 1; x >= basePos.Value.X - 2; x--)
+            // Trees can be up to 3 tiles wide; scan neighboring columns to find the tallest trunk column.
+            for (int offset = -2; offset <= 2; offset++)
             {
-                if (IsTreeTile(new Point(x, baseY)))
+                int columnX = basePos.Value.X + offset;
+                if (!IsTreeTile(new Point(columnX, baseY)))
                 {
-                    leftmost = x;
+                    continue;
                 }
-                else
+
+                int height = MeasureTrunkHeight(columnX, baseY);
+                bool taller = height > bestHeight;
+                bool sameHeightCloser = height == bestHeight &&
+                    Math.Abs(columnX - treeTile.X) < Math.Abs(centerX - treeTile.X);
+
+                if (taller || sameHeightCloser)
                 {
-                    break; // Stop at first non-trunk tile
+                    bestHeight = height;
+                    centerX = columnX;
                 }
             }
-
-            // Step 3: Scan right to find the rightmost trunk tile at base level
-            for (int x = basePos.Value.X + 1; x <= basePos.Value.X + 2; x++)
-            {
-                if (IsTreeTile(new Point(x, baseY)))
-                {
-                    rightmost = x;
-                }
-                else
-                {
-                    break; // Stop at first non-trunk tile
-                }
-            }
-
-            // Step 4: Calculate the center X coordinate (middle of the tree width)
-            int centerX = (leftmost + rightmost) / 2;
 
             return new Point(centerX, baseY);
+        }
+
+        private static int MeasureTrunkHeight(int columnX, int baseY, int maxHeight = 80)
+        {
+            int height = 0;
+            for (int y = baseY; y >= 0 && height < maxHeight; y--)
+            {
+                var checkTile = Framing.GetTileSafely(columnX, y);
+                if (!checkTile.HasTile || !TileID.Sets.IsATreeTrunk[checkTile.TileType])
+                {
+                    break;
+                }
+                height++;
+            }
+
+            return height;
         }
 
         /// <summary>
