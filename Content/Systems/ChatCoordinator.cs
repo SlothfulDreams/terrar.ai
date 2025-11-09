@@ -14,7 +14,24 @@ namespace TerrarAI.Content.Systems
 {
     public sealed class ChatCoordinator : ModSystem
     {
-        private const string RouterSystemPrompt = "You route Terraria chat requests. Respond with JSON: {\"type\":\"command\",\"command\":\"text\"} when the player wants an agent to act. Agents are always available - just route commands to them.";
+        private const string RouterSystemPrompt = @"You route Terraria commands for AI agent management and task assignment.
+Respond with JSON in one of these formats:
+
+1. Spawn agents: {""action"":""spawn"",""count"":N,""deleteExisting"":true}
+2. Task with agent selection: {""action"":""command"",""command"":""<task>"",""agentCount"":N}
+3. Task for all agents: {""action"":""command"",""command"":""<task>""}
+4. Recall agents: {""action"":""recall""}
+
+Examples:
+- ""spawn 8 agents"" → {""action"":""spawn"",""count"":8,""deleteExisting"":true}
+- ""create 5 agents"" → {""action"":""spawn"",""count"":5,""deleteExisting"":true}
+- ""two agents chop 2 trees"" → {""action"":""command"",""command"":""chop 2 trees"",""agentCount"":2}
+- ""one agent mine copper"" → {""action"":""command"",""command"":""mine copper"",""agentCount"":1}
+- ""all agents dig down"" → {""action"":""command"",""command"":""dig down""}
+- ""dismiss all agents"" → {""action"":""spawn"",""count"":0,""deleteExisting"":true}
+- ""recall agents"" → {""action"":""recall""}
+
+The system will select the N closest agents to the player for tasks with agentCount.";
 
         public override void OnWorldLoad()
         {
@@ -38,7 +55,7 @@ namespace TerrarAI.Content.Systems
             {
                 int spawnTileX = Main.spawnTileX;
                 int surfaceTileY = Main.spawnTileY;
-                
+
                 for (int y = Main.spawnTileY; y < Main.maxTilesY && y < Main.spawnTileY + 100; y++)
                 {
                     var tile = Framing.GetTileSafely(spawnTileX, y);
@@ -48,7 +65,7 @@ namespace TerrarAI.Content.Systems
                         break;
                     }
                 }
-                
+
                 spawnPosition = new Vector2(spawnTileX * 16f + 8f, surfaceTileY * 16f);
             }
             else
@@ -225,8 +242,8 @@ namespace TerrarAI.Content.Systems
             if (agentCount > 0)
             {
                 // Single global message instead of per-agent messages
-                string message = agentCount == 1 
-                    ? "Agent received command and is planning..." 
+                string message = agentCount == 1
+                    ? "Agent received command and is planning..."
                     : $"All {agentCount} agents received command and are planning...";
                 caller.Reply(message, Color.LightBlue);
             }
@@ -241,12 +258,33 @@ namespace TerrarAI.Content.Systems
             var coordinator = JsonSerializer.Deserialize<CoordinatorResponse>(responseText);
             if (coordinator == null)
             {
-                RouteTool(caller, originalText);
+                RouteToNearestAgents(caller, originalText, null);
                 return;
             }
 
             var commandText = string.IsNullOrWhiteSpace(coordinator.Command) ? originalText : coordinator.Command!;
-            RouteTool(caller, commandText);
+
+            // Handle different action types
+            switch (coordinator.Action?.ToLowerInvariant())
+            {
+                case "spawn":
+                    SpawnAgents(
+                        coordinator.Count ?? 1,
+                        caller.Player,
+                        caller,
+                        coordinator.DeleteExisting
+                    );
+                    break;
+
+                case "recall":
+                    RecallAllAgents(caller.Player, caller);
+                    break;
+
+                case "command":
+                default:
+                    RouteToNearestAgents(caller, commandText, coordinator.AgentCount);
+                    break;
+            }
         }
 
         private static IEnumerable<NPC> EnumerateAgents()
@@ -277,6 +315,116 @@ namespace TerrarAI.Content.Systems
             }
             return count;
         }
+
+        private static void SpawnAgents(int count, Player commander, CommandCaller caller, bool deleteExisting)
+        {
+            if (deleteExisting)
+            {
+                DeleteAllAgents(caller);
+            }
+
+            // Clamp count to reasonable range
+            count = Math.Clamp(count, 0, 50);
+
+            if (count == 0)
+            {
+                caller.Reply("All agents dismissed.", Color.Orange);
+                return;
+            }
+
+            // Spawn agents at player position with spread
+            Vector2 basePosition = commander.Bottom;
+            for (int i = 0; i < count; i++)
+            {
+                float offsetX = (i - count / 2f) * 40f;  // Spread them out
+                Vector2 spawnPos = basePosition + new Vector2(offsetX, -42f);
+                string name = $"Agent {i + 1}";
+                SpawnAgentAtPosition(spawnPos, name, new EntitySource_WorldGen(), 73);
+            }
+
+            caller.Reply($"Spawned {count} agent(s). Soul split into {count + 1} pieces.", Color.LightGreen);
+        }
+
+        private static void DeleteAllAgents(CommandCaller caller)
+        {
+            int deleted = 0;
+            foreach (var npc in EnumerateAgents())
+            {
+                if (npc.ModNPC is AIAgentNPC)
+                {
+                    // Release all claims before deletion
+                    MultiAgentCoordinator.ReleaseAllClaimsForAgent(npc.whoAmI);
+                    MultiAgentCoordinator.ReleaseHellevator(npc.whoAmI);
+
+                    npc.active = false;
+
+                    if (Main.netMode == Terraria.ID.NetmodeID.Server)
+                    {
+                        Terraria.NetMessage.SendData(Terraria.ID.MessageID.SyncNPC, -1, -1, null, npc.whoAmI);
+                    }
+
+                    deleted++;
+                }
+            }
+
+            if (deleted > 0)
+            {
+                caller.Reply($"Deleted {deleted} agent(s).", Color.Orange);
+            }
+        }
+
+        private static void RouteToNearestAgents(CommandCaller caller, string commandText, int? targetCount)
+        {
+            Player commander = caller.Player;
+            if (commander == null)
+            {
+                return;
+            }
+
+            // Get all active agents with their distances to the player
+            var agentsWithDistance = new List<(NPC npc, AIAgentNPC agent, float distance)>();
+            foreach (var npc in EnumerateAgents())
+            {
+                if (npc.ModNPC is AIAgentNPC agent)
+                {
+                    float distance = Vector2.Distance(npc.Center, commander.Center);
+                    agentsWithDistance.Add((npc, agent, distance));
+                }
+            }
+
+            if (agentsWithDistance.Count == 0)
+            {
+                caller.Reply("No agents available. Use '/ai spawn N agents' to create some.", Color.Red);
+                return;
+            }
+
+            // Sort by distance (closest first)
+            agentsWithDistance.Sort((a, b) => a.distance.CompareTo(b.distance));
+
+            // Select N closest agents, or all if not specified
+            int selectCount = targetCount.HasValue && targetCount > 0
+                ? Math.Min(targetCount.Value, agentsWithDistance.Count)
+                : agentsWithDistance.Count;
+
+            int count = 0;
+            float maxDistance = 0f;
+            for (int i = 0; i < selectCount; i++)
+            {
+                var agentData = agentsWithDistance[i];
+                agentData.agent.ReceiveCommand(commander, commandText);
+                maxDistance = agentData.distance;
+                count++;
+            }
+
+            if (targetCount.HasValue && targetCount > 0)
+            {
+                caller.Reply($"{count} closest agent(s) received command (within {maxDistance:F0}px)", Color.LightBlue);
+            }
+            else
+            {
+                caller.Reply($"All {count} agent(s) received command", Color.LightBlue);
+            }
+        }
     }
 
     internal sealed class CoordinatorResponse
@@ -286,6 +434,18 @@ namespace TerrarAI.Content.Systems
 
         [JsonPropertyName("command")]
         public string? Command { get; set; }
+
+        [JsonPropertyName("action")]
+        public string? Action { get; set; }
+
+        [JsonPropertyName("count")]
+        public int? Count { get; set; }
+
+        [JsonPropertyName("deleteExisting")]
+        public bool DeleteExisting { get; set; } = false;
+
+        [JsonPropertyName("agentCount")]
+        public int? AgentCount { get; set; }
     }
 
     internal sealed class AICommand : ModCommand
@@ -319,4 +479,3 @@ namespace TerrarAI.Content.Systems
         }
     }
 }
-

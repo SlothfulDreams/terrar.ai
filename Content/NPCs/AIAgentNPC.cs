@@ -70,7 +70,7 @@ namespace TerrarAI.Content.NPCs
 
         // Execution timeout tracking
         private long _executionStartTick;
-        
+
         // Action stagnation tracking
         private Vector2 _lastActionPosition = Vector2.Zero;
         private string? _lastActionName;
@@ -277,17 +277,17 @@ namespace TerrarAI.Content.NPCs
         public override void OnSpawn(IEntitySource source)
         {
             State = AgentState.Idle;
-            
+
             // Set base movement traits for each agent
             var random = new Random(NPC.whoAmI + (int)Main.GameUpdateCount);
             _baseSpeedMultiplier = 0.7f + (float)(random.NextDouble() * 0.6);
             _baseJumpMultiplier = 0.8f + (float)(random.NextDouble() * 0.4);
             _currentSpeedMultiplier = _baseSpeedMultiplier;
             _currentJumpMultiplier = _baseJumpMultiplier;
-            
+
             // Initialize phrase index with agent-specific offset for variety
             _currentPhraseIndex = NPC.whoAmI * 7; // Offset by agent ID
-            
+
             UpdateStatus(); // Use random idle phrase
         }
 
@@ -1357,6 +1357,23 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine($"- Facing: {(NPC.direction > 0 ? "RIGHT (→)" : "LEFT (←)")}");
             sb.AppendLine($"- Health: {NPC.life}/{NPC.lifeMax}");
 
+            // Count total agents for HP division info
+            int totalAgentCount = 0;
+            for (int i = 0; i < Main.maxNPCs; i++)
+            {
+                if (Main.npc[i].active && Main.npc[i].ModNPC is AIAgentNPC)
+                    totalAgentCount++;
+            }
+
+            // Calculate commander's HP share
+            int commanderMaxHP = _commander?.statLifeMax2 / (totalAgentCount + 1) ?? 0;
+
+            sb.AppendLine($"- Active Agents: {totalAgentCount} total in the world");
+            if (_commander != null)
+            {
+                sb.AppendLine($"- Commander HP: {_commander.statLife}/{commanderMaxHP} (shared among {totalAgentCount + 1} entities)");
+            }
+
             // Add hellevator state when active
             if (_hellevatorMode && _hellevatorColumnLeft.HasValue && _hellevatorCenterPixelX.HasValue)
             {
@@ -1391,6 +1408,12 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- Wait for the next observation before deciding the following step—never chain multiple actions into one reply.");
             sb.AppendLine("- Respond ONLY with valid JSON - no explanations or markdown.");
             sb.AppendLine("- Use 'complete' action when the task is finished.");
+            sb.AppendLine();
+            sb.AppendLine("⚠️ AGENT SELECTION & HP SHARING:");
+            sb.AppendLine("- When commander says 'N agents do X', the system selects the N closest agents to the commander.");
+            sb.AppendLine("- You may or may not be selected depending on your proximity to the commander.");
+            sb.AppendLine("- HP Sharing: Commander's max HP = statLifeMax2 / (totalAgents + 1). More agents = less HP for everyone.");
+            sb.AppendLine("- Be aware: Having many agents weakens the commander. Complete tasks efficiently to minimize risk.");
             sb.AppendLine();
             sb.AppendLine("⚠️ TARGET LOCKING RULE:");
             sb.AppendLine("- If you see '⚠️ CURRENT TARGET' in Nearby Resources, you MUST continue mining that exact target.");
