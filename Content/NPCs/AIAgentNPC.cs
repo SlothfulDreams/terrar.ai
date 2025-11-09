@@ -1342,11 +1342,13 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- chop(tileX, tileY): Chop a tree trunk. Auto-moves to target.");
             sb.AppendLine("- mine(tileX, tileY): Mine ore/stone in a 3x3 area centered on the tile. Auto-moves to target first.");
             sb.AppendLine("- hellevator([startX]): Dig a 3x3 tunnel straight down to the underworld. Keeps you centered on the middle column and re-centers if knocked off. Stops at underworld.");
+            sb.AppendLine("- build(direction): Build a stone platform by walking and placing blocks beneath you. Direction is \"left\" or \"right\".");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
             sb.AppendLine("- chop/mine actions automatically move you close enough.");
             sb.AppendLine("- hellevator() mines a 3x3 area, keeps you centered on the middle column, and stops at underworld.");
+            sb.AppendLine("- build() walks and places stone blocks beneath you continuously until stuck.");
             sb.AppendLine("- Items are AUTO-COLLECTED after every action! Mining/chopping drops items which are automatically added to inventory.");
 
             sb.AppendLine();
@@ -1499,6 +1501,13 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("  \"observation\": \"Hellevator reached the underworld; shaft is complete.\",");
             sb.AppendLine("  \"thought\": \"Task complete.\",");
             sb.AppendLine("  \"action\": {\"type\":\"complete\",\"params\":{\"message\":\"Finished hellevator\"}}");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine($"Example 6: Task is \"build right\"");
+            sb.AppendLine("{");
+            sb.AppendLine("  \"observation\": \"Need to build a stone platform to the right\",");
+            sb.AppendLine("  \"thought\": \"Use build action to walk right and place stone blocks beneath me\",");
+            sb.AppendLine("  \"action\": {\"type\":\"build\",\"params\":{\"direction\":\"right\"}}");
             sb.AppendLine("}");
 
             return sb.ToString();

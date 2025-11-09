@@ -75,6 +75,7 @@ namespace TerrarAI.Content.Actions
             RegisterExtended("mine", MineAction.CreateFromParameters);
             Register("chop", ChopAction.CreateFromParameters);
             Register("hellevator", HellevatorAction.CreateFromParameters);
+            Register("build", BuildAction.CreateFromParameters);
             Register("say", SayAction.CreateFromParameters);
             Register("complete", CompleteAction.CreateFromParameters);
 
