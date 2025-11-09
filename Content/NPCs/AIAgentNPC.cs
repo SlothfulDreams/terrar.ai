@@ -122,6 +122,108 @@ namespace TerrarAI.Content.NPCs
         private int _randomizationTimer = 0;
         private const int RANDOMIZATION_INTERVAL = 180; // 3 seconds at 60 FPS
 
+        // Status phrase rotation
+        private int _statusPhraseTimer = 0;
+        private const int STATUS_PHRASE_INTERVAL = 1200; // 20 seconds at 60 FPS
+        private int _currentPhraseIndex = 0;
+
+        // Static phrase pools for status messages (20 phrases per state)
+        private static readonly string[] PlanningPhrases = new[]
+        {
+            "Thinking...",
+            "Analyzing situation",
+            "Calculating route",
+            "Figuring it out",
+            "Planning approach",
+            "Considering options",
+            "Strategizing",
+            "Working on it",
+            "Let me think",
+            "Processing request",
+            "Evaluating terrain",
+            "Mapping the area",
+            "Checking resources",
+            "Plotting course",
+            "Assessing situation",
+            "Running diagnostics",
+            "Computing path",
+            "Scanning environment",
+            "Formulating plan",
+            "Analyzing data"
+        };
+
+        private static readonly string[] ExecutingPhrases = new[]
+        {
+            "On it!",
+            "Working hard",
+            "Making progress",
+            "Getting it done",
+            "Almost there",
+            "Executing task",
+            "In progress",
+            "Doing my best",
+            "Moving forward",
+            "Handling it",
+            "Task underway",
+            "Pushing through",
+            "Stay tuned",
+            "Working diligently",
+            "On the job",
+            "Making it happen",
+            "Progressing nicely",
+            "Steady progress",
+            "Getting there",
+            "Hard at work"
+        };
+
+        private static readonly string[] ReplanningPhrases = new[]
+        {
+            "Rethinking this",
+            "Adjusting plan",
+            "New approach",
+            "Trying again",
+            "Adapting strategy",
+            "Course correction",
+            "Replanning route",
+            "Different angle",
+            "Pivot time",
+            "Plan B activated",
+            "Changing tactics",
+            "Reassessing",
+            "New strategy",
+            "Switching gears",
+            "Alternative route",
+            "Adjusting approach",
+            "Reworking plan",
+            "Fresh perspective",
+            "Recalculating",
+            "Trying something else"
+        };
+
+        private static readonly string[] CompletedPhrases = new[]
+        {
+            "Mission complete",
+            "Task finished",
+            "All done!",
+            "Success!",
+            "Completed",
+            "Objective achieved",
+            "Job well done",
+            "Finished up",
+            "Task accomplished",
+            "Done and dusted",
+            "Wrapped up nicely",
+            "Mission accomplished",
+            "All wrapped up",
+            "Objective complete",
+            "Task complete",
+            "Successfully done",
+            "Finished perfectly",
+            "Job finished",
+            "All set and done",
+            "Complete!"
+        };
+
         public override void SetStaticDefaults()
         {
             Main.npcFrameCount[Type] = 16; // Goblin Scout frame count
@@ -175,14 +277,18 @@ namespace TerrarAI.Content.NPCs
         public override void OnSpawn(IEntitySource source)
         {
             State = AgentState.Idle;
-            _statusMessage = "Awaiting command";
-
+            
             // Set base movement traits for each agent
             var random = new Random(NPC.whoAmI + (int)Main.GameUpdateCount);
             _baseSpeedMultiplier = 0.7f + (float)(random.NextDouble() * 0.6);
             _baseJumpMultiplier = 0.8f + (float)(random.NextDouble() * 0.4);
             _currentSpeedMultiplier = _baseSpeedMultiplier;
             _currentJumpMultiplier = _baseJumpMultiplier;
+            
+            // Initialize phrase index with agent-specific offset for variety
+            _currentPhraseIndex = NPC.whoAmI * 7; // Offset by agent ID
+            
+            UpdateStatus(); // Use random idle phrase
         }
 
         public override void OnKill()
@@ -250,36 +356,35 @@ namespace TerrarAI.Content.NPCs
                     if (_actionQueue.Count == 0 && _currentAction == null)
                     {
                         State = AgentState.Idle;
-                        UpdateStatus("Idle");
+                        UpdateStatus(); // Use random idle phrase
                     }
                     break;
             }
 
             TickAutoCollect();
             UpdateFacing();
+            TickStatusPhraseRotation();
         }
 
 
         public override void PostDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
         {
-            var stateText = State.ToString();
-            var messageText = string.IsNullOrWhiteSpace(_statusMessage) ? "Ready" : _statusMessage;
-
-            var combined = $"{stateText}: {messageText}";
+            var messageText = string.IsNullOrWhiteSpace(_statusMessage) ? GetRandomStatusPhrase(State) : _statusMessage;
             var font = FontAssets.MouseText.Value;
-            var measurement = font.MeasureString(combined);
+            var measurement = font.MeasureString(messageText);
             var drawPosition = NPC.Top - screenPos - new Vector2(measurement.X * 0.5f, 24f);
 
             var color = State switch
             {
+                AgentState.Idle => Color.White,
                 AgentState.Planning => Color.CornflowerBlue,
                 AgentState.Executing => Color.LimeGreen,
                 AgentState.Replanning => Color.Orange,
-                AgentState.Completed => Color.LightGray,
+                AgentState.Completed => Color.Gold,
                 _ => Color.White
             };
 
-            Utils.DrawBorderString(spriteBatch, combined, drawPosition, color, 0.9f);
+            Utils.DrawBorderString(spriteBatch, messageText, drawPosition, color, 0.9f);
         }
 
         public override void SendExtraAI(BinaryWriter writer)
@@ -336,7 +441,7 @@ namespace TerrarAI.Content.NPCs
             _actionStartTick = 0;
 
             State = AgentState.Planning;
-            UpdateStatus("Planning...");
+            UpdateStatus(); // Use random planning phrase
 
             NPC.TargetClosest();
             BeginPlanning();
@@ -378,7 +483,7 @@ namespace TerrarAI.Content.NPCs
             // Set commander and state
             _commander = commander;
             State = AgentState.Idle;
-            UpdateStatus("Recalled to commander");
+            UpdateStatus(); // Use random idle phrase
 
             // Teleport to commander
             if (commander != null && commander.active && !commander.dead)
@@ -420,6 +525,9 @@ namespace TerrarAI.Content.NPCs
                 _stateBacking = (int)value;
                 NPC.ai[0] = _stateBacking;
                 NPC.netUpdate = true;
+
+                // Reset phrase timer on state change
+                ResetStatusPhraseTimer();
             }
         }
 
@@ -659,8 +767,7 @@ namespace TerrarAI.Content.NPCs
                     return;
                 }
 
-                long elapsedSeconds = elapsedTicks / 60;
-                UpdateStatus($"Planning with xAI... ({elapsedSeconds}s)");
+                // Status is set by state (Planning), no need for explicit message
                 ApplyIdlePhysics();
                 Mod.Logger.Info("[TickPlanning] Still waiting for task completion...");
                 return;
@@ -689,8 +796,8 @@ namespace TerrarAI.Content.NPCs
                 _executionStartTick = Main.GameUpdateCount;  // Track when execution started
                 _actionStartTick = Main.GameUpdateCount;  // Track when current action started
                 _actionRetryCount = 0;  // Reset action retry count
-                UpdateStatus("Executing plan...");
-                SendChatMessage($"Planning complete! Executing {actions.Count} action(s).", Color.LightGreen);
+                UpdateStatus(); // Use random executing phrase
+                // Chat message moved to ChatCoordinator to avoid spam
                 Mod.Logger.Info($"[TickPlanning] Successfully transitioned to Executing state with {actions.Count} actions");
                 _planningRetryCount = 0;  // Reset planning retry on success
             }
@@ -750,7 +857,7 @@ namespace TerrarAI.Content.NPCs
                     Mod.Logger.Info("[TickExecuting] No actions in queue, transitioning to Completed");
                     ResetActionSnapshot();
                     State = AgentState.Completed;
-                    UpdateStatus("Plan complete.");
+                    UpdateStatus(); // Use random completed phrase
                     return;
                 }
 
@@ -760,7 +867,7 @@ namespace TerrarAI.Content.NPCs
                 _actionStartTick = Main.GameUpdateCount;  // Track when this action started
                 _actionRetryCount = 0;  // Reset retry count for new action
                 ResetActionSnapshot();
-                UpdateStatus($"Executing {_currentAction.Name}...");
+                // Status is set by state, no need for explicit message
 
                 // TARGET LOCKING: Lock onto first ChopAction or MineAction target to prevent switching
                 if ((_currentAction is ChopAction chopAction || _currentAction is MineAction mineAction) && !_lockedMineTarget.HasValue)
@@ -797,7 +904,7 @@ namespace TerrarAI.Content.NPCs
                                     _actionQueue.Clear();
                                     _replanContext = "Tree was already claimed by another agent";
                                     State = AgentState.Replanning;
-                                    UpdateStatus("Replanning - tree claimed by another agent...");
+                                    UpdateStatus(); // Use random replanning phrase
                                     BeginPlanning();
                                     return;
                                 }
@@ -834,7 +941,7 @@ namespace TerrarAI.Content.NPCs
                         _currentAction = new MineAction(clamped);
                         hellevatorMine = (MineAction)_currentAction;
                         targetTile = clamped;
-                        UpdateStatus($"Aligning hellevator shaft to tile({clamped.X},{clamped.Y})");
+                        // Status is set by state (Executing), no need for explicit message
                     }
                 }
 
@@ -848,7 +955,7 @@ namespace TerrarAI.Content.NPCs
             {
                 if (!MovementHelper.IsOnGround(NPC) && !MovementHelper.IsStandingOnPlatform(NPC))
                 {
-                    UpdateStatus("Waiting to land...");
+                    // Status is set by state (Executing), no need for explicit message
                     ApplyGravityAndCollision();
                     return;
                 }
@@ -858,7 +965,7 @@ namespace TerrarAI.Content.NPCs
 
                 if (requiredRange > 0f && distance > requiredRange)
                 {
-                    UpdateStatus($"Approaching target... ({distance:F0}px away)");
+                    // Status is set by state (Executing), no need for explicit message
 
                     if (targetPos.HasValue)
                     {
@@ -927,7 +1034,7 @@ namespace TerrarAI.Content.NPCs
                     {
                         // Task is complete, transition to Completed state
                         State = AgentState.Completed;
-                        UpdateStatus("Task complete.");
+                        UpdateStatus(); // Use random completed phrase
                         ClearHellevatorState();  // Clear hellevator state on completion
                         ClearTargetLock();  // Clear target lock on completion
                         _previousActionResult = null;  // Clear for next command
@@ -958,7 +1065,7 @@ namespace TerrarAI.Content.NPCs
                         _actionQueue.Clear();
                         _replanContext = _previousActionResult;
                         State = AgentState.Replanning;
-                        UpdateStatus($"Replanning next action... (cycle {_replanCycleCount}/{MAX_REPLAN_CYCLES})");
+                        UpdateStatus(); // Use random replanning phrase
                         BeginPlanning();
                     }
                     break;
@@ -976,8 +1083,8 @@ namespace TerrarAI.Content.NPCs
                         Mod.Logger.Info($"[TickExecuting] Action failed after {actionElapsedTicks} ticks ({actionElapsedTicks / 60f:F1}s). Retrying (attempt {_actionRetryCount}/{MAX_ACTION_RETRIES + 1})");
                         _currentAction.Reset();
                         _actionStartTick = Main.GameUpdateCount;  // Reset start time for retry
-                        UpdateStatus($"Retrying {_currentAction.Name}... (attempt {_actionRetryCount}/{MAX_ACTION_RETRIES + 1})");
-                        SendChatMessage($"Action failed, retrying once...", Color.Orange);
+                        // Status is set by state (Executing), no need for explicit message
+                        // Chat message removed to avoid spam
                         break;  // Continue with retry next tick
                     }
 
@@ -1008,7 +1115,7 @@ namespace TerrarAI.Content.NPCs
 
                     _replanContext = failureReason;
                     State = AgentState.Replanning;
-                    UpdateStatus("Replanning due to failure...");
+                    UpdateStatus(); // Use random replanning phrase
                     BeginPlanning();
                     break;
             }
@@ -1063,7 +1170,7 @@ namespace TerrarAI.Content.NPCs
                 _actionQueue.Enqueue(action);
             }
 
-            UpdateStatus($"Queued {_actionQueue.Count} actions.");
+            // Status is set by state, no need for explicit message
         }
 
         private void BeginPlanning()
@@ -1086,12 +1193,7 @@ namespace TerrarAI.Content.NPCs
             _planningStartTick = Main.GameUpdateCount;
             _maxPlanningTicks = config.MaxPlanningSeconds * 60; // Convert seconds to ticks (60 FPS)
 
-            // Notify player that planning has started
-            string commandPreview = _currentCommand!.Length > 50
-                ? _currentCommand.Substring(0, 47) + "..."
-                : _currentCommand;
-            SendChatMessage($"Planning: \"{commandPreview}\"", Color.CornflowerBlue);
-
+            // Chat notification moved to ChatCoordinator to avoid spam
             _plannerTask = ExecutePlanningAsync();
         }
 
@@ -1683,7 +1785,7 @@ namespace TerrarAI.Content.NPCs
 
             float adjust = MathHelper.Clamp(delta / 18f, -2.2f, 2.2f);
             NPC.velocity.X = adjust;
-            UpdateStatus("Centering in hellevator shaft...");
+            // Status is set by state (Executing), no need for explicit message
             return false;
         }
 
@@ -1759,7 +1861,7 @@ namespace TerrarAI.Content.NPCs
             ResetActionSnapshot();
             _replanContext = $"Stagnated on {actionName} for {seconds:F1}s";
             State = AgentState.Replanning;
-            UpdateStatus("Replanning due to inactivity...");
+            UpdateStatus(); // Use random replanning phrase
             BeginPlanning();
         }
 
@@ -2145,19 +2247,73 @@ namespace TerrarAI.Content.NPCs
             return builder.ToString();
         }
 
-        private void UpdateStatus(string message)
+        private string GetRandomStatusPhrase(AgentState state)
         {
-            if (string.IsNullOrWhiteSpace(message))
+            string[] phrases = state switch
             {
-                message = "Idle";
+                AgentState.Planning => PlanningPhrases,
+                AgentState.Executing => ExecutingPhrases,
+                AgentState.Replanning => ReplanningPhrases,
+                AgentState.Completed => CompletedPhrases,
+                _ => Array.Empty<string>() // No phrases for idle or unknown states
+            };
+
+            // Return empty if no phrases available
+            if (phrases.Length == 0)
+            {
+                return "";
             }
 
-            if (_statusMessage == message)
+            // Use the current phrase index (rotates every 20 seconds)
+            int index = _currentPhraseIndex % phrases.Length;
+            return phrases[index];
+        }
+
+        private void TickStatusPhraseRotation()
+        {
+            _statusPhraseTimer++;
+            if (_statusPhraseTimer >= STATUS_PHRASE_INTERVAL)
+            {
+                _statusPhraseTimer = 0;
+                _currentPhraseIndex++;
+                // Update status to show new phrase
+                UpdateStatus();
+            }
+        }
+
+        private void ResetStatusPhraseTimer()
+        {
+            _statusPhraseTimer = 0;
+            // Pick a new random starting index for variety, using agent ID for independence
+            var random = new Random(NPC.whoAmI * 1000 + (int)Main.GameUpdateCount);
+            _currentPhraseIndex = random.Next(20);
+        }
+
+        private void UpdateStatus(string? message = null)
+        {
+            // If explicit message provided (e.g., progress updates), use it
+            // Otherwise, pick a random phrase from the current state's pool
+            string newStatus;
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                newStatus = message;
+            }
+            else if (State == AgentState.Idle)
+            {
+                // Don't show any message when idle
+                newStatus = "";
+            }
+            else
+            {
+                newStatus = GetRandomStatusPhrase(State);
+            }
+
+            if (_statusMessage == newStatus)
             {
                 return;
             }
 
-            _statusMessage = message;
+            _statusMessage = newStatus;
             if (Main.netMode == NetmodeID.Server)
             {
                 NPC.netUpdate = true;

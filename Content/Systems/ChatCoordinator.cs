@@ -171,37 +171,6 @@ namespace TerrarAI.Content.Systems
                    lowerText.Contains("teleport to me");
         }
 
-        internal static bool IsTreeChoppingCommand(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            var lowerText = text.ToLowerInvariant();
-            return lowerText.Contains("chop tree") ||
-                   lowerText.Contains("chop trees") ||
-                   lowerText.Contains("cut tree") ||
-                   lowerText.Contains("cut trees") ||
-                   lowerText.Contains("fell tree") ||
-                   lowerText.Contains("fell trees");
-        }
-
-        internal static bool IsHellevatorCommand(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            var lowerText = text.ToLowerInvariant();
-            return lowerText.Contains("hellevator") ||
-                   lowerText.Contains("dig hellevator") ||
-                   lowerText.Contains("mine hellevator") ||
-                   lowerText.Contains("dig down") ||
-                   (lowerText.Contains("dig") && lowerText.Contains("down"));
-        }
-
         internal static void RecallAllAgents(Player commander, CommandCaller caller)
         {
             int recalledCount = 0;
@@ -237,30 +206,8 @@ namespace TerrarAI.Content.Systems
                 return;
             }
 
-            // Check if this is a tree chopping command - broadcast to all agents
-            if (IsTreeChoppingCommand(commandText))
-            {
-                BroadcastToAllAgents(player, commandText, caller);
-                return;
-            }
-
-            // Check if this is a hellevator command - broadcast to all agents
-            if (IsHellevatorCommand(commandText))
-            {
-                BroadcastToAllAgents(player, commandText, caller);
-                return;
-            }
-
-            // Otherwise, route to nearest agent (existing behavior)
-            var agent = FindNearestAgent(player);
-            if (agent?.ModNPC is not AIAgentNPC aiAgent)
-            {
-                caller.Reply("No agents available.", Color.OrangeRed);
-                return;
-            }
-
-            aiAgent.ReceiveCommand(player, commandText);
-            caller.Reply($"Sent command to {agent.GivenName ?? "agent"}.", Color.LightBlue);
+            // Always broadcast to all agents simultaneously
+            BroadcastToAllAgents(player, commandText, caller);
         }
 
         private static void BroadcastToAllAgents(Player commander, string commandText, CommandCaller caller)
@@ -277,7 +224,11 @@ namespace TerrarAI.Content.Systems
 
             if (agentCount > 0)
             {
-                caller.Reply($"Broadcasted command to {agentCount} agent(s).", Color.LightBlue);
+                // Single global message instead of per-agent messages
+                string message = agentCount == 1 
+                    ? "Agent received command and is planning..." 
+                    : $"All {agentCount} agents received command and are planning...";
+                caller.Reply(message, Color.LightBlue);
             }
             else
             {
@@ -296,24 +247,6 @@ namespace TerrarAI.Content.Systems
 
             var commandText = string.IsNullOrWhiteSpace(coordinator.Command) ? originalText : coordinator.Command!;
             RouteTool(caller, commandText);
-        }
-
-        private static NPC? FindNearestAgent(Player player)
-        {
-            NPC? best = null;
-            var bestDistance = float.MaxValue;
-
-            foreach (var npc in EnumerateAgents())
-            {
-                var distance = Vector2.DistanceSquared(player.Center, npc.Center);
-                if (distance < bestDistance)
-                {
-                    bestDistance = distance;
-                    best = npc;
-                }
-            }
-
-            return best;
         }
 
         private static IEnumerable<NPC> EnumerateAgents()
