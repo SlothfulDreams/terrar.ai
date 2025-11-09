@@ -60,7 +60,8 @@ namespace TerrarAI.Content.NPCs
 
         // Execution timeout tracking
         private long _executionStartTick;
-        private const long EXECUTION_TIMEOUT_TICKS = 300; // 5 seconds at 60 FPS
+        private long _maxExecutionTicks;
+        private const int MAX_EXECUTION_SECONDS = 120; // 2 minutes per command
 
         // Follower AI - Teleportation and stuck detection
         private int _stuckTimer = 0;
@@ -126,6 +127,7 @@ namespace TerrarAI.Content.NPCs
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
             NPC.damage = 0;
+            NPC.stepSpeed = 0.6f; // Enable auto-step over 1-tile obstacles (like players)
         }
 
         public override void FindFrame(int frameHeight)
@@ -285,6 +287,10 @@ namespace TerrarAI.Content.NPCs
             _hellevatorColumnLeft = null;
             _hellevatorCenterPixelX = null;
             ClearTargetLock();  // Clear target lock for new command
+
+            // Reset execution timeout for new command
+            _executionStartTick = 0;
+            _maxExecutionTicks = 0;
 
             State = AgentState.Planning;
             UpdateStatus("Planning...");
@@ -617,6 +623,31 @@ namespace TerrarAI.Content.NPCs
 
         private void TickExecuting()
         {
+            // Initialize execution timeout on first tick
+            if (_executionStartTick == 0)
+            {
+                _executionStartTick = Main.GameUpdateCount;
+                _maxExecutionTicks = MAX_EXECUTION_SECONDS * 60;
+            }
+
+            // Check for execution timeout (global safety net)
+            long elapsedTicks = Main.GameUpdateCount - _executionStartTick;
+            if (elapsedTicks > _maxExecutionTicks)
+            {
+                // Force failure and transition to replanning
+                Mod.Logger.Warn($"[TickExecuting] Execution timed out after {MAX_EXECUTION_SECONDS}s");
+
+                _currentAction?.Reset();
+                _currentAction = null;
+                _actionQueue.Clear();
+
+                _replanContext = $"Action execution timed out after {MAX_EXECUTION_SECONDS}s. Task may be impossible or stuck.";
+                State = AgentState.Replanning;
+                UpdateStatus("Execution timeout, replanning...");
+                SendChatMessage($"Action took too long ({MAX_EXECUTION_SECONDS}s), trying different approach.", Color.Orange);
+                return;
+            }
+
             Mod.Logger.Info($"[TickExecuting] Entry - _currentAction={((_currentAction == null) ? "null" : _currentAction.Name)}, queueCount={_actionQueue.Count}");
 
             // Check execution timeout - if executing same task for more than 5 seconds, replan
@@ -769,12 +800,12 @@ namespace TerrarAI.Content.NPCs
                         UpdateStatus(result.Message);
                     }
 
-                    // Apply STRONG friction to slow down agent when executing stationary actions
-                    // Note: MineAction also applies its own velocity dampening for stability
+                    // Apply gentle friction to allow stepSpeed to work during stationary actions
+                    // Note: MineAction and ChopAction apply their own minimal velocity maintenance
                     if (_currentAction is not MoveAction)
                     {
-                        MovementHelper.ApplyFriction(NPC, 0.8f);  // Strong friction to prevent drifting
-                        NPC.velocity.Y *= 0.85f; // Keep some Y velocity for gravity
+                        MovementHelper.ApplyFriction(NPC, 0.3f);  // Lighter friction allows stepSpeed
+                        // Don't dampen Y velocity - let gravity work naturally for step-up
                     }
                     break;
                 case AgentActionStatus.Success:

@@ -19,15 +19,23 @@ namespace TerrarAI.Content.Actions
         private Item? _currentPickaxe;
         private bool _initialized;
         private bool _slowMiningToggle;
+        private int _lastProgressCheckTick;
+        private int _lastDamageAmount;
+        private const int PROGRESS_CHECK_INTERVAL = 120; // 2 seconds
 
         public MineAction(Point tile) : base(tile)
         {
             _damageAccumulated = 0;
             _initialized = false;
             _slowMiningToggle = false;
+            _lastProgressCheckTick = 0;
+            _lastDamageAmount = 0;
         }
 
         public override string Name => "mine";
+
+        // Override timeout for mining actions - allow up to 15 seconds
+        protected override int MaxExecutionTicks => 900;
 
         public override float GetRequiredRange() => 80f;  // 5 tiles = 80 pixels (standard player reach)
 
@@ -40,6 +48,8 @@ namespace TerrarAI.Content.Actions
             _currentPickaxe = null;
             _initialized = false;
             _slowMiningToggle = false;
+            _lastProgressCheckTick = 0;
+            _lastDamageAmount = 0;
         }
 
         protected override void OnCancel()
@@ -141,9 +151,14 @@ namespace TerrarAI.Content.Actions
             {
                 _initialized = true;
 
-                // ZERO VELOCITY COMPLETELY to prevent any drift during mining
-                context.Agent.velocity.X = 0f;
-                context.Agent.velocity.Y = 0f;
+                // Maintain minimal velocity for stepSpeed to work (allows stepping over 1-tile obstacles)
+                const float MIN_STEP_VELOCITY = 0.15f;
+                if (Math.Abs(context.Agent.velocity.X) < MIN_STEP_VELOCITY)
+                {
+                    context.Agent.velocity.X = context.Agent.direction * MIN_STEP_VELOCITY;
+                }
+                context.Agent.velocity.X *= 0.9f;  // Gentle friction
+                context.Agent.velocity.Y *= 0.9f;
 
                 // Check if tile exists
                 var tile = Framing.GetTileSafely(Tile.X, Tile.Y);
@@ -181,9 +196,9 @@ namespace TerrarAI.Content.Actions
                     $"Drifted out of range while mining (now {currentDistance:F0}px away, max {GetRequiredRange()}px). Position unstable.");
             }
 
-            // RE-ZERO VELOCITY each tick to combat any drift
-            MovementHelper.ApplyFriction(context.Agent, 0.8f);
-            context.Agent.velocity.Y *= 0.5f;
+            // Apply gentle friction while maintaining minimal velocity for stepSpeed
+            MovementHelper.ApplyFriction(context.Agent, 0.3f);  // Lighter friction
+            context.Agent.velocity.Y *= 0.95f;  // Gentle Y dampening
 
             // Check if tile still exists
             var currentTile = Framing.GetTileSafely(Tile.X, Tile.Y);
@@ -197,7 +212,28 @@ namespace TerrarAI.Content.Actions
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
 
-            // Animation removed - using default fairy sprite rendering
+            // Progress validation: Detect if mining is stalled (no progress for 2 seconds)
+            if (_damageAccumulated > 0 && _damageAccumulated % 30 == 0)
+            {
+                if (_damageAccumulated == _lastDamageAmount)
+                {
+                    // No progress since last check
+                    _lastProgressCheckTick++;
+                    if (_lastProgressCheckTick >= PROGRESS_CHECK_INTERVAL / 30)
+                    {
+                        string tileName = TileID.Search.GetName(currentTile.TileType);
+                        return AgentActionResult.Failure(
+                            $"Mining stalled at {_damageAccumulated}% for {PROGRESS_CHECK_INTERVAL / 60f:F1}s. " +
+                            $"Tile '{tileName}' may be protected or pickaxe power insufficient.");
+                    }
+                }
+                else
+                {
+                    // Progress detected, reset stall counter
+                    _lastProgressCheckTick = 0;
+                    _lastDamageAmount = _damageAccumulated;
+                }
+            }
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)

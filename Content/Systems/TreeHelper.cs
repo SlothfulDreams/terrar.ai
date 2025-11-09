@@ -47,6 +47,63 @@ namespace TerrarAI.Content.Systems
         }
 
         /// <summary>
+        /// Finds the center (main) trunk column of a tree.
+        /// Trees can have multiple trunk columns (up to 3 tiles wide).
+        /// According to Terraria mechanics: "cutting at the lowermost center tile will destroy the entire tree".
+        /// This method finds that critical center tile.
+        /// </summary>
+        public static Point? FindTreeCenter(Point treeTile)
+        {
+            if (!IsTreeTile(treeTile))
+            {
+                return null;
+            }
+
+            // Step 1: Find the base Y coordinate of any trunk column
+            var basePos = FindTreeBase(treeTile);
+            if (!basePos.HasValue)
+            {
+                return null;
+            }
+
+            int baseY = basePos.Value.Y;
+            int leftmost = basePos.Value.X;
+            int rightmost = basePos.Value.X;
+
+            // Step 2: Scan left to find the leftmost trunk tile at base level
+            // Trees can be up to 3 tiles wide, so check up to 2 tiles left
+            for (int x = basePos.Value.X - 1; x >= basePos.Value.X - 2; x--)
+            {
+                if (IsTreeTile(new Point(x, baseY)))
+                {
+                    leftmost = x;
+                }
+                else
+                {
+                    break; // Stop at first non-trunk tile
+                }
+            }
+
+            // Step 3: Scan right to find the rightmost trunk tile at base level
+            for (int x = basePos.Value.X + 1; x <= basePos.Value.X + 2; x++)
+            {
+                if (IsTreeTile(new Point(x, baseY)))
+                {
+                    rightmost = x;
+                }
+                else
+                {
+                    break; // Stop at first non-trunk tile
+                }
+            }
+
+            // Step 4: Calculate the center X coordinate (middle of the tree width)
+            int centerX = (leftmost + rightmost) / 2;
+
+            return new Point(centerX, baseY);
+        }
+
+        /// <summary>
         /// Gets all trunk tiles belonging to a tree (scanning from base upward).
         /// </summary>
         public static List<Point> GetAllTreeTiles(Point treeBase)
