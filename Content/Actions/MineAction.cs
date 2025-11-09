@@ -168,11 +168,7 @@ namespace TerrarAI.Content.Actions
                     return AgentActionResult.Failure($"Pickaxe too weak to mine {tileName} (need {requiredPower}% power, have {_currentPickaxe.pick}%)");
                 }
 
-                // Trigger initial swing animation (longer duration for visibility)
-                if (context.Agent.ModNPC is AIAgentNPC aiAgent)
-                {
-                    aiAgent.TriggerItemAnimation(_currentPickaxe, 30);
-                }
+                // Animation removed - using default fairy sprite rendering
             }
 
             // POSITION VALIDATION: Verify agent hasn't drifted out of range
@@ -201,11 +197,7 @@ namespace TerrarAI.Content.Actions
             int damagePerTick = CalculateMiningDamage(_currentPickaxe.pick, currentTile.TileType);
             _damageAccumulated += damagePerTick;
 
-            // Trigger swing animation periodically (every 30 ticks for slower, visible swings)
-            if (_damageAccumulated % 30 == 0 && context.Agent.ModNPC is AIAgentNPC agent)
-            {
-                agent.TriggerItemAnimation(_currentPickaxe, 30);
-            }
+            // Animation removed - using default fairy sprite rendering
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)

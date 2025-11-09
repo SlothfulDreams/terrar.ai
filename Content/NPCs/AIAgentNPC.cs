@@ -94,8 +94,8 @@ namespace TerrarAI.Content.NPCs
         private readonly List<(string role, string content)> _conversationHistory = new();
         private const int MAX_HISTORY_MESSAGES = 20; // Last 10 exchanges (user+assistant pairs)
 
-        // Player appearance clone (stored for rendering as player)
-        private Player? _appearanceClone;
+        // Goblin Scout NPC ID
+        private int _npcSpriteId = 73;
 
         // Per-agent randomized movement traits
         private float _baseSpeedMultiplier = 1f;
@@ -107,16 +107,16 @@ namespace TerrarAI.Content.NPCs
 
         public override void SetStaticDefaults()
         {
-            Main.npcFrameCount[Type] = 1;
+            Main.npcFrameCount[Type] = 16; // Goblin Scout frame count
         }
 
-        public override string Texture => "Terraria/Images/NPC_0";  // Use vanilla fallback texture since we render as player
+        public override string Texture => "Terraria/Images/NPC_73";
 
         public override void SetDefaults()
         {
-            // Use player-like dimensions
-            NPC.width = 20;
-            NPC.height = 42;
+            // Use Goblin Scout dimensions (match vanilla NPC 73)
+            NPC.width = 40;
+            NPC.height = 40;
             NPC.friendly = true;
             NPC.dontTakeDamage = true;
             NPC.dontTakeDamageFromHostiles = true;
@@ -126,6 +126,32 @@ namespace TerrarAI.Content.NPCs
             NPC.noTileCollide = false;
             NPC.knockBackResist = 0f;
             NPC.damage = 0;
+        }
+
+        public override void FindFrame(int frameHeight)
+        {
+            NPC.frameCounter++;
+            
+            if (Math.Abs(NPC.velocity.X) > 0.1f)
+            {
+                // Walking animation - cycle through frames
+                if (NPC.frameCounter >= 6) // Animation speed (higher = slower)
+                {
+                    NPC.frameCounter = 0;
+                    NPC.frame.Y += frameHeight;
+                    
+                    if (NPC.frame.Y >= Main.npcFrameCount[Type] * frameHeight)
+                    {
+                        NPC.frame.Y = 0; // Loop back to first frame
+                    }
+                }
+            }
+            else
+            {
+                // Idle animation - use first frame
+                NPC.frame.Y = 0;
+                NPC.frameCounter = 0;
+            }
         }
 
         public override void OnSpawn(IEntitySource source)
@@ -139,96 +165,13 @@ namespace TerrarAI.Content.NPCs
             _baseJumpMultiplier = 0.8f + (float)(random.NextDouble() * 0.4);
             _currentSpeedMultiplier = _baseSpeedMultiplier;
             _currentJumpMultiplier = _baseJumpMultiplier;
-
-            // Clone player appearance if spawned by a player
-            if (source is EntitySource_Parent parent && parent.Entity is Player player)
-            {
-                ClonePlayerAppearance(player);
-            }
         }
 
-        private void ClonePlayerAppearance(Player sourcePlayer)
+        public void SetNpcSpriteId(int npcSpriteId)
         {
-            // Create a dummy player object for rendering
-            _appearanceClone = new Player();
-
-            // Copy visual appearance
-            _appearanceClone.skinVariant = sourcePlayer.skinVariant;
-            _appearanceClone.hair = sourcePlayer.hair;
-            _appearanceClone.hairDye = sourcePlayer.hairDye;
-            _appearanceClone.hairColor = sourcePlayer.hairColor;
-            _appearanceClone.skinColor = sourcePlayer.skinColor;
-            _appearanceClone.eyeColor = sourcePlayer.eyeColor;
-            _appearanceClone.shirtColor = sourcePlayer.shirtColor;
-            _appearanceClone.underShirtColor = sourcePlayer.underShirtColor;
-            _appearanceClone.pantsColor = sourcePlayer.pantsColor;
-            _appearanceClone.shoeColor = sourcePlayer.shoeColor;
-
-            // Copy equipment/armor for visuals
-            var armorLength = Math.Min(_appearanceClone.armor.Length, sourcePlayer.armor.Length);
-            for (int i = 0; i < armorLength; i++)
-            {
-                _appearanceClone.armor[i] = sourcePlayer.armor[i].Clone();
-            }
-
-            var dyeLength = Math.Min(_appearanceClone.dye.Length, sourcePlayer.dye.Length);
-            for (int i = 0; i < dyeLength; i++)
-            {
-                _appearanceClone.dye[i] = sourcePlayer.dye[i].Clone();
-            }
-
-            // Copy hotbar items for visual display (inventory slots 0-9)
-            for (int i = 0; i < 10 && i < sourcePlayer.inventory.Length; i++)
-            {
-                _appearanceClone.inventory[i] = sourcePlayer.inventory[i].Clone();
-            }
-
-            // Set male/female
-            _appearanceClone.Male = sourcePlayer.Male;
+            _npcSpriteId = npcSpriteId;
         }
 
-        // Public method to set player appearance (can be called externally)
-        public void SetPlayerAppearance(Player player)
-        {
-            ClonePlayerAppearance(player);
-        }
-
-        /// <summary>
-        /// Triggers item use animation on the agent's appearance clone.
-        /// </summary>
-        public void TriggerItemAnimation(Item tool, int duration)
-        {
-            if (_appearanceClone == null || tool == null || tool.IsAir)
-            {
-                return;
-            }
-
-            // Set the tool as the held item
-            _appearanceClone.inventory[_appearanceClone.selectedItem] = tool.Clone();
-
-            // Start animation counters
-            _appearanceClone.itemAnimation = duration;
-            _appearanceClone.itemTime = duration;
-            _appearanceClone.itemAnimationMax = duration;
-        }
-
-        /// <summary>
-        /// Updates item rotation based on animation progress (called each frame during animation).
-        /// </summary>
-        private void UpdateItemRotation()
-        {
-            if (_appearanceClone == null || _appearanceClone.itemAnimation <= 0)
-            {
-                return;
-            }
-
-            // Decrement animation counter
-            _appearanceClone.itemAnimation--;
-
-            // Calculate rotation based on animation progress (creates swing effect)
-            float progress = 1f - (_appearanceClone.itemAnimation / (float)_appearanceClone.itemAnimationMax);
-            _appearanceClone.itemRotation = MathHelper.Lerp(-MathHelper.PiOver4, MathHelper.PiOver4, progress);
-        }
 
         public override void AI()
         {
@@ -275,47 +218,8 @@ namespace TerrarAI.Content.NPCs
 
             TickAutoCollect();
             UpdateFacing();
-            UpdateItemRotation();
         }
 
-        public override bool PreDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
-        {
-            // If we have a player appearance clone, draw as player
-            if (_appearanceClone != null)
-            {
-                DrawAsPlayer(spriteBatch, screenPos, drawColor);
-                return false; // Prevent default NPC drawing
-            }
-
-            return true; // Use default drawing if no appearance clone
-        }
-
-        private void DrawAsPlayer(SpriteBatch spriteBatch, Vector2 screenPos, Color lightColor)
-        {
-            if (_appearanceClone == null) return;
-
-            // Update the clone's position and direction to match NPC
-            _appearanceClone.position = NPC.position;
-            _appearanceClone.direction = NPC.direction;
-            _appearanceClone.velocity = NPC.velocity;
-            _appearanceClone.fullRotation = 0f;
-            _appearanceClone.fullRotationOrigin = Vector2.Zero;
-
-            // Set animation frame based on movement
-            if (Math.Abs(NPC.velocity.X) > 0.1f)
-            {
-                _appearanceClone.legFrame.Y = (int)((Main.GameUpdateCount / 7) % 20) * 56; // Walking animation
-            }
-            else
-            {
-                _appearanceClone.legFrame.Y = 0; // Standing
-            }
-            _appearanceClone.bodyFrame.Y = _appearanceClone.legFrame.Y;
-            _appearanceClone.headFrame.Y = 0;
-
-            // Use official tModLoader player renderer
-            Main.PlayerRenderer.DrawPlayer(Main.Camera, _appearanceClone, NPC.position, 0f, Vector2.Zero, 0f);
-        }
 
         public override void PostDraw(SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
         {
@@ -717,25 +621,29 @@ namespace TerrarAI.Content.NPCs
 
             // Check execution timeout - if executing same task for more than 5 seconds, replan
             // Exclude HellevatorAction from timeout since it's a long-running task that reports progress
-            if (_executionStartTick > 0 && _currentAction is not HellevatorAction)
+            if (_executionStartTick > 0)
             {
                 long executionTicks = Main.GameUpdateCount - _executionStartTick;
-                if (executionTicks >= EXECUTION_TIMEOUT_TICKS)
+                
+                if (_currentAction is not HellevatorAction)
                 {
-                    Mod.Logger.Info($"[TickExecuting] Execution timeout after {executionTicks} ticks, triggering replan");
-                    _actionQueue.Clear();
-                    _currentAction?.Reset();
-                    _currentAction = null;
-                    _replanContext = $"Execution timeout after 5 seconds. Task may be stuck.";
-                    State = AgentState.Replanning;
-                    UpdateStatus("Execution timeout, replanning...");
-                    
-                    // Only start planning if not already planning (avoid concurrent API calls)
-                    if (_plannerTask == null)
+                    // Standard timeout for other actions
+                    if (executionTicks >= EXECUTION_TIMEOUT_TICKS)
                     {
-                        BeginPlanning();
+                        Mod.Logger.Info($"[TickExecuting] Execution timeout after {executionTicks} ticks, triggering replan");
+                        _actionQueue.Clear();
+                        _currentAction?.Reset();
+                        _currentAction = null;
+                        _replanContext = $"Execution timeout after 5 seconds. Task may be stuck.";
+                        State = AgentState.Replanning;
+                        UpdateStatus("Execution timeout, replanning...");
+                        
+                        if (_plannerTask == null)
+                        {
+                            BeginPlanning();
+                        }
+                        return;
                     }
-                    return;
                 }
             }
 
@@ -1184,7 +1092,6 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine("- mine(tileX, tileY): Mine ore/stone. Auto-moves to target.");
             sb.AppendLine("- hellevator([startX]): Dig a 3x3 tunnel straight down to the underworld. Keeps you centered on the middle column and re-centers if knocked off. Stops at underworld.");
             sb.AppendLine("- say(text): Broadcast a chat message to all players.");
-            sb.AppendLine("- place(tileX, tileY, blockType): Place a tile at absolute grid coordinates (1=dirt, 2=stone, 9=wood). Auto-moves first.");
             sb.AppendLine("- complete(message): Signal that the task is finished.");
             sb.AppendLine("- All actions use ABSOLUTE coordinates (not relative).");
             sb.AppendLine("- chop/mine actions automatically move you close enough.");

@@ -165,11 +165,7 @@ namespace TerrarAI.Content.Actions
                     return AgentActionResult.Failure("No axe available in commander's inventory.");
                 }
 
-                // Trigger initial swing animation
-                if (context.Agent.ModNPC is AIAgentNPC aiAgent)
-                {
-                    aiAgent.TriggerItemAnimation(_currentAxe, 30);
-                }
+                // Animation removed - using default fairy sprite rendering
             }
 
             // POSITION VALIDATION: Verify agent hasn't drifted out of range
@@ -202,11 +198,7 @@ namespace TerrarAI.Content.Actions
             int damagePerTick = CalculateChoppingDamage(_currentAxe.axe);
             _damageAccumulated += damagePerTick;
 
-            // Trigger swing animation periodically
-            if (_damageAccumulated % 30 == 0 && context.Agent.ModNPC is AIAgentNPC agent)
-            {
-                agent.TriggerItemAnimation(_currentAxe, 30);
-            }
+            // Animation removed - using default fairy sprite rendering
 
             // Destroy tile when damage reaches 100
             if (_damageAccumulated >= 100)

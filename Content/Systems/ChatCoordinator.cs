@@ -14,14 +14,99 @@ namespace TerrarAI.Content.Systems
 {
     public sealed class ChatCoordinator : ModSystem
     {
-        private const string RouterSystemPrompt = "You route Terraria chat requests. Respond with JSON: {\"type\":\"create\",\"count\":N} to spawn that many agents (1-8), {\"type\":\"remove\",\"all\":true|false} to despawn, or {\"type\":\"command\",\"command\":\"text\"} when the player wants an agent to act. Default count is 1. Only choose remove when the player clearly wants to despawn agents.";
-        private static int _nameSeed = 1;
-        private static float _nextSpawnOffsetX;
+        private const string RouterSystemPrompt = "You route Terraria chat requests. Respond with JSON: {\"type\":\"command\",\"command\":\"text\"} when the player wants an agent to act. Agents are always available - just route commands to them.";
 
         public override void OnWorldLoad()
         {
-            _nameSeed = 1;
-            _nextSpawnOffsetX = 0f;
+            if (ServerAuthority.IsServer)
+            {
+                SpawnInitialAgents();
+            }
+        }
+
+        private static void SpawnInitialAgents()
+        {
+            if (CountAgents() > 0)
+            {
+                return;
+            }
+
+            Vector2 spawnPosition;
+            Player? appearanceSource = null;
+
+            if (Main.spawnTileX > 0 && Main.spawnTileY > 0)
+            {
+                int spawnTileX = Main.spawnTileX;
+                int surfaceTileY = Main.spawnTileY;
+                
+                for (int y = Main.spawnTileY; y < Main.maxTilesY && y < Main.spawnTileY + 100; y++)
+                {
+                    var tile = Framing.GetTileSafely(spawnTileX, y);
+                    if (tile.HasTile && Main.tileSolid[tile.TileType])
+                    {
+                        surfaceTileY = y;
+                        break;
+                    }
+                }
+                
+                spawnPosition = new Vector2(spawnTileX * 16f + 8f, surfaceTileY * 16f);
+            }
+            else
+            {
+                var firstPlayer = GetFirstActivePlayer();
+                if (firstPlayer == null)
+                {
+                    return;
+                }
+                spawnPosition = firstPlayer.Bottom;
+                appearanceSource = firstPlayer;
+            }
+
+            if (appearanceSource == null)
+            {
+                appearanceSource = GetFirstActivePlayer();
+            }
+
+            for (int i = 0; i < 3; i++)
+            {
+                var offsetX = (i - 1) * 32f;
+                var agentPosition = spawnPosition + new Vector2(offsetX, -42f);
+                var agentName = $"Agent {i + 1}";
+                SpawnAgentAtPosition(agentPosition, agentName, new EntitySource_WorldGen(), 73); // Goblin Scout
+            }
+        }
+
+        private static Player? GetFirstActivePlayer()
+        {
+            for (int i = 0; i < Main.maxPlayers; i++)
+            {
+                var player = Main.player[i];
+                if (player != null && player.active && !player.dead)
+                {
+                    return player;
+                }
+            }
+            return null;
+        }
+
+        private static void SpawnAgentAtPosition(Vector2 position, string name, IEntitySource source, int npcSpriteId)
+        {
+            var index = NPC.NewNPC(source, (int)position.X, (int)position.Y, ModContent.NPCType<AIAgentNPC>());
+            if (index < 0 || index >= Main.maxNPCs)
+            {
+                return;
+            }
+
+            var npc = Main.npc[index];
+            if (npc.ModNPC is not AIAgentNPC agentNpc)
+            {
+                return;
+            }
+
+            npc.direction = 1;
+            npc.GivenName = name;
+            agentNpc.SetNpcSpriteId(npcSpriteId);
+            npc.netUpdate = true;
         }
 
         internal static void HandleInput(CommandCaller caller, string text)
@@ -56,98 +141,6 @@ namespace TerrarAI.Content.Systems
             });
         }
 
-        internal static void CreateAgents(CommandCaller caller, int count)
-        {
-            if (!ServerAuthority.EnsureServer(message => caller.Reply(message, Color.OrangeRed)))
-            {
-                return;
-            }
-
-            var player = caller.Player;
-            if (player == null)
-            {
-                return;
-            }
-
-            var created = new List<string>();
-            count = Math.Clamp(count, 1, 8);
-
-            for (int i = 0; i < count; i++)
-            {
-                var spawnOffsetX = 48f * player.direction + (i * 16f) + (_nextSpawnOffsetX * player.direction);
-                var spawnOffset = new Vector2(spawnOffsetX, -16f);
-                var spawnPos = player.Center + spawnOffset;
-                var index = NPC.NewNPC(new EntitySource_DebugCommand("TerrarAI:ChatCoordinator"), (int)spawnPos.X, (int)spawnPos.Y, ModContent.NPCType<AIAgentNPC>());
-                if (index < 0 || index >= Main.maxNPCs)
-                {
-                    continue;
-                }
-
-                var npc = Main.npc[index];
-                npc.direction = player.direction;
-                npc.GivenName = $"Agent {_nameSeed++}";
-                if (npc.ModNPC is AIAgentNPC agentNpc)
-                {
-                    agentNpc.SetPlayerAppearance(player);
-                }
-                npc.netUpdate = true;
-                created.Add(npc.GivenName ?? "Agent");
-
-                _nextSpawnOffsetX += 30f;
-            }
-
-            if (created.Count == 0)
-            {
-                caller.Reply("Failed to create agent.", Color.OrangeRed);
-            }
-            else if (created.Count == 1)
-            {
-                caller.Reply($"Created {created[0]}.", Color.LightGreen);
-            }
-            else
-            {
-                caller.Reply($"Created {created.Count} agents.", Color.LightGreen);
-            }
-        }
-
-        internal static void RemoveAgent(CommandCaller caller, bool removeAll)
-        {
-            if (!ServerAuthority.EnsureServer(message => caller.Reply(message, Color.OrangeRed)))
-            {
-                return;
-            }
-
-            var player = caller.Player;
-            if (player == null)
-            {
-                return;
-            }
-
-            if (removeAll)
-            {
-                var removed = 0;
-                foreach (var agent in EnumerateAgents())
-                {
-                    removed++;
-                    Despawn(agent);
-                }
-
-                caller.Reply(removed == 0 ? "No agents to remove." : $"Removed {removed} agent{(removed == 1 ? string.Empty : "s")}.", Color.LightSalmon);
-                return;
-            }
-
-            var nearest = FindNearestAgent(player);
-            if (nearest == null)
-            {
-                caller.Reply("No agents nearby.", Color.OrangeRed);
-                return;
-            }
-
-            var name = nearest.GivenName ?? "Agent";
-            Despawn(nearest);
-            caller.Reply($"Removed {name}.", Color.LightSalmon);
-        }
-
         internal static void RouteTool(CommandCaller caller, string commandText)
         {
             if (!ServerAuthority.EnsureServer(message => caller.Reply(message, Color.OrangeRed)))
@@ -164,7 +157,7 @@ namespace TerrarAI.Content.Systems
             var agent = FindNearestAgent(player);
             if (agent?.ModNPC is not AIAgentNPC aiAgent)
             {
-                caller.Reply("Create an agent first by requesting one.", Color.OrangeRed);
+                caller.Reply("No agents available.", Color.OrangeRed);
                 return;
             }
 
@@ -181,20 +174,8 @@ namespace TerrarAI.Content.Systems
                 return;
             }
 
-            var type = coordinator.Type?.ToLowerInvariant();
-            switch (type)
-            {
-                case "create":
-                    CreateAgents(caller, coordinator.Count <= 0 ? 1 : coordinator.Count);
-                    break;
-                case "remove":
-                    RemoveAgent(caller, coordinator.All);
-                    break;
-                default:
-                    var commandText = string.IsNullOrWhiteSpace(coordinator.Command) ? originalText : coordinator.Command!;
-                    RouteTool(caller, commandText);
-                    break;
-            }
+            var commandText = string.IsNullOrWhiteSpace(coordinator.Command) ? originalText : coordinator.Command!;
+            RouteTool(caller, commandText);
         }
 
         private static NPC? FindNearestAgent(Player player)
@@ -228,12 +209,6 @@ namespace TerrarAI.Content.Systems
             }
         }
 
-        private static void Despawn(NPC npc)
-        {
-            npc.StrikeInstantKill();
-            npc.netUpdate = true;
-        }
-
         private static string BuildUserPrompt(Player player, string text)
         {
             var agentCount = CountAgents();
@@ -255,12 +230,6 @@ namespace TerrarAI.Content.Systems
     {
         [JsonPropertyName("type")]
         public string? Type { get; set; }
-
-        [JsonPropertyName("count")]
-        public int Count { get; set; }
-
-        [JsonPropertyName("all")]
-        public bool All { get; set; }
 
         [JsonPropertyName("command")]
         public string? Command { get; set; }
