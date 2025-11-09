@@ -177,6 +177,17 @@ namespace TerrarAI.Content.NPCs
             _currentJumpMultiplier = _baseJumpMultiplier;
         }
 
+        public override void OnKill()
+        {
+            // Release any tree claims when agent is killed
+            if (ServerAuthority.IsServer && _lockedMineTarget.HasValue && _isLockedTargetTree)
+            {
+                MultiAgentCoordinator.ReleaseTree(_lockedMineTarget.Value);
+            }
+            MultiAgentCoordinator.ReleaseAllClaimsForAgent(NPC.whoAmI);
+            base.OnKill();
+        }
+
         public void SetNpcSpriteId(int npcSpriteId)
         {
             _npcSpriteId = npcSpriteId;
@@ -191,6 +202,13 @@ namespace TerrarAI.Content.NPCs
                 MovementHelper.ApplyFriction(NPC, 1.0f);
                 UpdateFacing();
                 return;
+            }
+
+            // Cleanup claims if NPC becomes inactive
+            if (!NPC.active && _lockedMineTarget.HasValue && _isLockedTargetTree)
+            {
+                MultiAgentCoordinator.ReleaseTree(_lockedMineTarget.Value);
+                MultiAgentCoordinator.ReleaseAllClaimsForAgent(NPC.whoAmI);
             }
 
             // Diagnostic logging - log Planning and Executing states
@@ -741,13 +759,30 @@ namespace TerrarAI.Content.NPCs
                             var treeBase = TreeHelper.FindTreeBase(targetTile.Value);
                             if (treeBase.HasValue)
                             {
-                                _lockedMineTarget = treeBase.Value;
-                                _lockReason = "tree";
-                                _isLockedTargetTree = true;
-
-                                if (TerrarAI_Config.Get().EnableVerboseLogging)
+                                // Claim the tree before locking
+                                if (MultiAgentCoordinator.ClaimTree(treeBase.Value, NPC.whoAmI))
                                 {
-                                    Mod.Logger.Info($"[Target Lock] Locked onto TREE at base tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                                    _lockedMineTarget = treeBase.Value;
+                                    _lockReason = "tree";
+                                    _isLockedTargetTree = true;
+
+                                    if (TerrarAI_Config.Get().EnableVerboseLogging)
+                                    {
+                                        Mod.Logger.Info($"[Target Lock] Locked onto TREE at base tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                                    }
+                                }
+                                else
+                                {
+                                    // Tree already claimed by another agent - cancel this action and replan
+                                    Mod.Logger.Info($"[Target Lock] Tree at base tile({treeBase.Value.X},{treeBase.Value.Y}) already claimed by another agent, replanning");
+                                    _currentAction.Cancel();
+                                    _currentAction = null;
+                                    _actionQueue.Clear();
+                                    _replanContext = "Tree was already claimed by another agent";
+                                    State = AgentState.Replanning;
+                                    UpdateStatus("Replanning - tree claimed by another agent...");
+                                    BeginPlanning();
+                                    return;
                                 }
                             }
                         }
@@ -1208,8 +1243,11 @@ namespace TerrarAI.Content.NPCs
             sb.AppendLine(DescribeInventory());
             sb.AppendLine();
 
-            // Use simplified WorldContext for environment info (with target lock info)
-            var worldContext = new WorldContext(NPC, _commander, _lockedMineTarget, _lockReason);
+            // Get claimed trees from MultiAgentCoordinator
+            var claimedTrees = MultiAgentCoordinator.GetClaimedTrees();
+
+            // Use simplified WorldContext for environment info (with target lock info and claimed trees)
+            var worldContext = new WorldContext(NPC, _commander, _lockedMineTarget, _lockReason, claimedTrees);
             sb.Append(worldContext.GetContextSummary());
 
             sb.AppendLine();
@@ -1611,9 +1649,22 @@ namespace TerrarAI.Content.NPCs
 
         private void ClearTargetLock()
         {
-            if (_lockedMineTarget.HasValue && TerrarAI_Config.Get().EnableVerboseLogging)
+            if (_lockedMineTarget.HasValue)
             {
-                Mod.Logger.Info($"[Target Lock] Cleared lock on {_lockReason ?? "resource"} at tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                // Release tree claim if this was a tree
+                if (_isLockedTargetTree)
+                {
+                    MultiAgentCoordinator.ReleaseTree(_lockedMineTarget.Value);
+                    if (TerrarAI_Config.Get().EnableVerboseLogging)
+                    {
+                        Mod.Logger.Info($"[Target Lock] Released tree claim at base tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                    }
+                }
+
+                if (TerrarAI_Config.Get().EnableVerboseLogging)
+                {
+                    Mod.Logger.Info($"[Target Lock] Cleared lock on {_lockReason ?? "resource"} at tile({_lockedMineTarget.Value.X},{_lockedMineTarget.Value.Y})");
+                }
             }
 
             _lockedMineTarget = null;

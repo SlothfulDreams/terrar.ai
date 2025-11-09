@@ -171,6 +171,22 @@ namespace TerrarAI.Content.Systems
                    lowerText.Contains("teleport to me");
         }
 
+        internal static bool IsTreeChoppingCommand(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var lowerText = text.ToLowerInvariant();
+            return lowerText.Contains("chop tree") ||
+                   lowerText.Contains("chop trees") ||
+                   lowerText.Contains("cut tree") ||
+                   lowerText.Contains("cut trees") ||
+                   lowerText.Contains("fell tree") ||
+                   lowerText.Contains("fell trees");
+        }
+
         internal static void RecallAllAgents(Player commander, CommandCaller caller)
         {
             int recalledCount = 0;
@@ -206,6 +222,14 @@ namespace TerrarAI.Content.Systems
                 return;
             }
 
+            // Check if this is a tree chopping command - broadcast to all agents
+            if (IsTreeChoppingCommand(commandText))
+            {
+                BroadcastToAllAgents(player, commandText, caller);
+                return;
+            }
+
+            // Otherwise, route to nearest agent (existing behavior)
             var agent = FindNearestAgent(player);
             if (agent?.ModNPC is not AIAgentNPC aiAgent)
             {
@@ -215,6 +239,28 @@ namespace TerrarAI.Content.Systems
 
             aiAgent.ReceiveCommand(player, commandText);
             caller.Reply($"Sent command to {agent.GivenName ?? "agent"}.", Color.LightBlue);
+        }
+
+        private static void BroadcastToAllAgents(Player commander, string commandText, CommandCaller caller)
+        {
+            int agentCount = 0;
+            foreach (var npc in EnumerateAgents())
+            {
+                if (npc.ModNPC is AIAgentNPC agent)
+                {
+                    agent.ReceiveCommand(commander, commandText);
+                    agentCount++;
+                }
+            }
+
+            if (agentCount > 0)
+            {
+                caller.Reply($"Broadcasted command to {agentCount} agent(s).", Color.LightBlue);
+            }
+            else
+            {
+                caller.Reply("No agents available.", Color.OrangeRed);
+            }
         }
 
         private static void ApplyCoordinatorResponse(CommandCaller caller, string originalText, string responseText)

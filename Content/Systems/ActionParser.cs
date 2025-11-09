@@ -22,15 +22,18 @@ namespace TerrarAI.Content.Systems
 
             validator.EnsureServerOrThrow();
 
+            // Get claimed trees from MultiAgentCoordinator
+            var claimedTrees = MultiAgentCoordinator.GetClaimedTrees();
+
             // Create WorldContext for natural language parameter support
-            var worldContext = new WorldContext(agent, commander);
+            var worldContext = new WorldContext(agent, commander, null, null, claimedTrees);
 
             using var document = JsonDocument.Parse(json);
 
             // Try ReAct format first: {"observation": "...", "thought": "...", "action": {...}, "complete": false}
             if (document.RootElement.TryGetProperty("action", out var actionElement))
             {
-                return ParseReActFormat(document.RootElement, validator, worldContext, agent);
+                return ParseReActFormat(document.RootElement, validator, worldContext, agent, commander);
             }
 
             // Fallback to legacy format: {"actions": [{...}, {...}]}
@@ -68,7 +71,7 @@ namespace TerrarAI.Content.Systems
             return actions;
         }
 
-        private static IReadOnlyList<AgentAction> ParseReActFormat(JsonElement root, ActionValidator validator, WorldContext worldContext, NPC agent)
+        private static IReadOnlyList<AgentAction> ParseReActFormat(JsonElement root, ActionValidator validator, WorldContext worldContext, NPC agent, Player? commander)
         {
             // Extract observation and thought (optional, for logging/debugging)
             var observation = root.TryGetProperty("observation", out var obsElement) && obsElement.ValueKind == JsonValueKind.String

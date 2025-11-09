@@ -14,17 +14,19 @@ namespace TerrarAI.Content.Systems
         private readonly Player? _commander;
         private readonly Point? _lockedMineTarget;
         private readonly string? _lockReason;
+        private readonly HashSet<Point>? _claimedTrees;
         private const int SCAN_RADIUS = 25; // 25 tiles = ~400 pixels
         private const int RESOURCE_SCAN_RADIUS = 60; // Extended search for meaningful resources
         private const float MAX_REACH = 80f; // 5 tiles
         private const float ITEM_STABLE_SPEED_THRESHOLD = 0.6f; // px per frame
 
-        public WorldContext(NPC agent, Player? commander = null, Point? lockedMineTarget = null, string? lockReason = null)
+        public WorldContext(NPC agent, Player? commander = null, Point? lockedMineTarget = null, string? lockReason = null, HashSet<Point>? claimedTrees = null)
         {
             _agent = agent;
             _commander = commander;
             _lockedMineTarget = lockedMineTarget;
             _lockReason = lockReason;
+            _claimedTrees = claimedTrees;
         }
 
         public string GetContextSummary()
@@ -65,6 +67,15 @@ namespace TerrarAI.Content.Systems
             int agentTileY = (int)(_agent.Center.Y / 16f);
             var centerTile = new Point(agentTileX, agentTileY);
             var treeBases = TreeHelper.FindTreeBasesNear(centerTile, RESOURCE_SCAN_RADIUS);
+            
+            // Filter out claimed trees (unless it's our own claimed tree)
+            if (_claimedTrees != null && _claimedTrees.Count > 0)
+            {
+                treeBases = treeBases.Where(t => 
+                    !_claimedTrees.Contains(t) || 
+                    (_lockedMineTarget.HasValue && t == _lockedMineTarget.Value)
+                ).ToList();
+            }
             
             if (treeBases.Count == 0)
             {
