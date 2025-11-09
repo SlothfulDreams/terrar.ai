@@ -187,6 +187,21 @@ namespace TerrarAI.Content.Systems
                    lowerText.Contains("fell trees");
         }
 
+        internal static bool IsHellevatorCommand(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var lowerText = text.ToLowerInvariant();
+            return lowerText.Contains("hellevator") ||
+                   lowerText.Contains("dig hellevator") ||
+                   lowerText.Contains("mine hellevator") ||
+                   lowerText.Contains("dig down") ||
+                   (lowerText.Contains("dig") && lowerText.Contains("down"));
+        }
+
         internal static void RecallAllAgents(Player commander, CommandCaller caller)
         {
             int recalledCount = 0;
@@ -224,6 +239,13 @@ namespace TerrarAI.Content.Systems
 
             // Check if this is a tree chopping command - broadcast to all agents
             if (IsTreeChoppingCommand(commandText))
+            {
+                BroadcastToAllAgents(player, commandText, caller);
+                return;
+            }
+
+            // Check if this is a hellevator command - broadcast to all agents
+            if (IsHellevatorCommand(commandText))
             {
                 BroadcastToAllAgents(player, commandText, caller);
                 return;

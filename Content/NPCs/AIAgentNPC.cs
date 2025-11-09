@@ -70,6 +70,14 @@ namespace TerrarAI.Content.NPCs
 
         // Execution timeout tracking
         private long _executionStartTick;
+        
+        // Action stagnation tracking
+        private Vector2 _lastActionPosition = Vector2.Zero;
+        private string? _lastActionName;
+        private long _lastActionSnapshotTick;
+        private bool _hasActionSnapshot;
+        private const float ACTION_STAGNATION_POSITION_TOLERANCE = 4f; // pixels
+        private const long ACTION_STAGNATION_TICKS = 300; // 5 seconds at 60 FPS
 
         // Follower AI - Teleportation and stuck detection
         private int _stuckTimer = 0;
@@ -185,6 +193,9 @@ namespace TerrarAI.Content.NPCs
                 MultiAgentCoordinator.ReleaseTree(_lockedMineTarget.Value);
             }
             MultiAgentCoordinator.ReleaseAllClaimsForAgent(NPC.whoAmI);
+            // Release hellevator claim if this agent claimed it
+            MultiAgentCoordinator.ReleaseHellevator(NPC.whoAmI);
+            ResetActionSnapshot();
             base.OnKill();
         }
 
@@ -313,6 +324,8 @@ namespace TerrarAI.Content.NPCs
             _hellevatorColumnLeft = null;
             _hellevatorCenterPixelX = null;
             ClearTargetLock();  // Clear target lock for new command
+            ClearHellevatorState();
+            ResetActionSnapshot();
 
             // Reset execution timeout for new command
             _executionStartTick = 0;
@@ -354,6 +367,8 @@ namespace TerrarAI.Content.NPCs
             _hellevatorCenterPixelX = null;
             ClearTargetLock();
             ClearHellevatorState();
+            // Release hellevator claim if this agent claimed it
+            MultiAgentCoordinator.ReleaseHellevator(NPC.whoAmI);
             
             // Reset retry counters
             _planningRetryCount = 0;
@@ -733,6 +748,7 @@ namespace TerrarAI.Content.NPCs
                 if (_actionQueue.Count == 0)
                 {
                     Mod.Logger.Info("[TickExecuting] No actions in queue, transitioning to Completed");
+                    ResetActionSnapshot();
                     State = AgentState.Completed;
                     UpdateStatus("Plan complete.");
                     return;
@@ -743,6 +759,7 @@ namespace TerrarAI.Content.NPCs
                 _currentAction.Reset();
                 _actionStartTick = Main.GameUpdateCount;  // Track when this action started
                 _actionRetryCount = 0;  // Reset retry count for new action
+                ResetActionSnapshot();
                 UpdateStatus($"Executing {_currentAction.Name}...");
 
                 // TARGET LOCKING: Lock onto first ChopAction or MineAction target to prevent switching
@@ -897,6 +914,7 @@ namespace TerrarAI.Content.NPCs
 
                     _currentAction.Reset();
                     _currentAction = null;
+                    ResetActionSnapshot();
 
                     // Auto-clear lock if target is fully destroyed (tree fully chopped, ore vein depleted, etc.)
                     if (_lockedMineTarget.HasValue && !ShouldMaintainLock())
@@ -985,6 +1003,7 @@ namespace TerrarAI.Content.NPCs
                     _currentAction = null;
                     _actionQueue.Clear();
                     ClearHellevatorState();  // Clear hellevator state on failure
+                    ResetActionSnapshot();
                     _actionRetryCount = 0;  // Reset retry count
 
                     _replanContext = failureReason;
@@ -992,6 +1011,11 @@ namespace TerrarAI.Content.NPCs
                     UpdateStatus("Replanning due to failure...");
                     BeginPlanning();
                     break;
+            }
+
+            if (_currentAction != null && CheckActionStagnation(result.Status))
+            {
+                return;
             }
         }
 
@@ -1640,11 +1664,90 @@ namespace TerrarAI.Content.NPCs
             return false;
         }
 
+        private void ResetActionSnapshot()
+        {
+            _hasActionSnapshot = false;
+            _lastActionName = null;
+            _lastActionSnapshotTick = 0;
+            _lastActionPosition = Vector2.Zero;
+        }
+
+        private void CaptureActionSnapshot()
+        {
+            if (_currentAction == null)
+            {
+                return;
+            }
+
+            _lastActionPosition = NPC.Center;
+            _lastActionName = _currentAction.Name ?? string.Empty;
+            _lastActionSnapshotTick = Main.GameUpdateCount;
+            _hasActionSnapshot = true;
+        }
+
+        private bool CheckActionStagnation(AgentActionStatus status)
+        {
+            if (_currentAction == null)
+            {
+                ResetActionSnapshot();
+                return false;
+            }
+
+            if (status != AgentActionStatus.Pending)
+            {
+                ResetActionSnapshot();
+                return false;
+            }
+
+            var currentActionName = _currentAction.Name ?? string.Empty;
+
+            if (!_hasActionSnapshot || !string.Equals(_lastActionName, currentActionName, StringComparison.Ordinal))
+            {
+                CaptureActionSnapshot();
+                return false;
+            }
+
+            if (Vector2.DistanceSquared(_lastActionPosition, NPC.Center) > ACTION_STAGNATION_POSITION_TOLERANCE * ACTION_STAGNATION_POSITION_TOLERANCE)
+            {
+                CaptureActionSnapshot();
+                return false;
+            }
+
+            long elapsed = Main.GameUpdateCount - _lastActionSnapshotTick;
+            if (elapsed >= ACTION_STAGNATION_TICKS)
+            {
+                HandleActionStagnation(currentActionName, elapsed);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void HandleActionStagnation(string actionName, long elapsedTicks)
+        {
+            float seconds = elapsedTicks / 60f;
+            Mod.Logger.Info($"[ActionStagnation] '{actionName}' stagnated for {seconds:F1}s. Triggering replanning.");
+            SendChatMessage($"Stuck on {actionName}, replanning...", Color.Orange);
+            _currentAction?.Reset();
+            _currentAction = null;
+            _actionQueue.Clear();
+            ClearHellevatorState();
+            _actionRetryCount = 0;
+            ResetActionSnapshot();
+            _replanContext = $"Stagnated on {actionName} for {seconds:F1}s";
+            State = AgentState.Replanning;
+            UpdateStatus("Replanning due to inactivity...");
+            BeginPlanning();
+        }
+
         private void ClearHellevatorState()
         {
             _hellevatorMode = false;
             _hellevatorColumnLeft = null;
             _hellevatorCenterPixelX = null;
+            // Release hellevator claim if this agent claimed it
+            MultiAgentCoordinator.ReleaseHellevator(NPC.whoAmI);
+            ResetActionSnapshot();
         }
 
         private void ClearTargetLock()

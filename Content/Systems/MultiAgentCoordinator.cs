@@ -14,10 +14,16 @@ namespace TerrarAI.Content.Systems
         // Maps tree base position -> agent NPC.whoAmI
         private static readonly Dictionary<Point, int> _claimedTrees = new();
 
+        // Shared hellevator center X position (tile coordinate)
+        private static int? _activeHellevatorCenterX = null;
+        private static int? _hellevatorClaimingAgent = null;
+
         public override void OnWorldUnload()
         {
             // Clear all claims when world unloads
             _claimedTrees.Clear();
+            _activeHellevatorCenterX = null;
+            _hellevatorClaimingAgent = null;
         }
 
         /// <summary>
@@ -84,6 +90,56 @@ namespace TerrarAI.Content.Systems
         public static int? GetClaimingAgent(Point treeBase)
         {
             return _claimedTrees.TryGetValue(treeBase, out int agentWhoAmI) ? agentWhoAmI : null;
+        }
+
+        /// <summary>
+        /// Claims a hellevator for an agent. First agent to call this sets the shared center X.
+        /// Returns true if claim succeeded, false if already claimed by another agent.
+        /// </summary>
+        public static bool ClaimHellevator(int centerX, int agentWhoAmI)
+        {
+            if (_activeHellevatorCenterX.HasValue && _hellevatorClaimingAgent.HasValue)
+            {
+                // Hellevator already claimed - check if it's the same agent
+                if (_hellevatorClaimingAgent.Value == agentWhoAmI)
+                {
+                    return true; // Same agent, already claimed
+                }
+                return false; // Already claimed by another agent
+            }
+
+            // First agent to claim sets the center
+            _activeHellevatorCenterX = centerX;
+            _hellevatorClaimingAgent = agentWhoAmI;
+            return true;
+        }
+
+        /// <summary>
+        /// Gets the shared hellevator center X position, or null if no hellevator is active.
+        /// </summary>
+        public static int? GetHellevatorCenter()
+        {
+            return _activeHellevatorCenterX;
+        }
+
+        /// <summary>
+        /// Releases a hellevator claim. Only the claiming agent can release it.
+        /// </summary>
+        public static void ReleaseHellevator(int agentWhoAmI)
+        {
+            if (_hellevatorClaimingAgent.HasValue && _hellevatorClaimingAgent.Value == agentWhoAmI)
+            {
+                _activeHellevatorCenterX = null;
+                _hellevatorClaimingAgent = null;
+            }
+        }
+
+        /// <summary>
+        /// Checks if a hellevator is currently being dug.
+        /// </summary>
+        public static bool IsHellevatorActive()
+        {
+            return _activeHellevatorCenterX.HasValue;
         }
     }
 }

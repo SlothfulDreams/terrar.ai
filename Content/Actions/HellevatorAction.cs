@@ -27,8 +27,12 @@ namespace TerrarAI.Content.Actions
         private bool _initialized;
         private bool _positionInitialized;
         private int _blocksMinedSinceLastReport;
+        private int _agentWhoAmI; // Store agent ID for claim release
+        private int _lastJumpTick; // Track last jump time
         private const float CENTER_TOLERANCE = 8f; // pixels
         private const int BLOCKS_PER_REPLAN_CHECK = 20; // Report status every 20 blocks mined
+        private const int JUMP_COOLDOWN_TICKS = 90; // 1.5 seconds at 60 FPS
+        private const float JUMP_CHANCE = 0.3f; // 30% chance to jump when nearby agent detected
 
         public HellevatorAction(int startTileX = 0)
         {
@@ -39,10 +43,25 @@ namespace TerrarAI.Content.Actions
             }
             _initialized = false;
             _positionInitialized = startTileX != 0;
+            _agentWhoAmI = -1;
+            _lastJumpTick = 0;
         }
 
         private void InitializePosition(int startTileX)
         {
+            // Check if hellevator is already active - use shared center
+            var sharedCenter = MultiAgentCoordinator.GetHellevatorCenter();
+            if (sharedCenter.HasValue)
+            {
+                // Use shared center from coordinator
+                startTileX = sharedCenter.Value;
+            }
+            else
+            {
+                // First agent - claim hellevator with current position
+                // Note: agentWhoAmI will be set in OnTick when we have context
+            }
+
             // Set up 3x3 shaft: center on the startTileX, with one column on each side
             _middleColumnX = startTileX;
             _leftColumnX = startTileX - 1;
@@ -68,6 +87,8 @@ namespace TerrarAI.Content.Actions
             _initialized = false;
             _positionInitialized = false;
             _blocksMinedSinceLastReport = 0;
+            _agentWhoAmI = -1;
+            _lastJumpTick = 0;
         }
 
         protected override void OnCancel()
@@ -75,6 +96,12 @@ namespace TerrarAI.Content.Actions
             base.OnCancel();
             _currentMineAction?.Cancel();
             _centeringMoveAction?.Cancel();
+            
+            // Release hellevator claim if this agent claimed it
+            if (_agentWhoAmI >= 0)
+            {
+                MultiAgentCoordinator.ReleaseHellevator(_agentWhoAmI);
+            }
         }
 
         protected override AgentActionResult OnTick(AgentActionContext context)
@@ -89,16 +116,69 @@ namespace TerrarAI.Content.Actions
             int currentTileY = (int)(npc.Bottom.Y / 16f);
             int currentTileX = (int)(npc.Center.X / 16f);
 
+            // Store agent ID for claim management
+            if (_agentWhoAmI < 0)
+            {
+                _agentWhoAmI = npc.whoAmI;
+            }
+
             // Initialize position from agent if not set
             if (!_positionInitialized)
             {
-                InitializePosition(currentTileX);
+                // Check if hellevator is already active - use shared center
+                var sharedCenter = MultiAgentCoordinator.GetHellevatorCenter();
+                if (sharedCenter.HasValue)
+                {
+                    // Use shared center from coordinator
+                    InitializePosition(sharedCenter.Value);
+                }
+                else
+                {
+                    // First agent - claim hellevator with current position
+                    if (MultiAgentCoordinator.ClaimHellevator(currentTileX, _agentWhoAmI))
+                    {
+                        InitializePosition(currentTileX);
+                    }
+                    else
+                    {
+                        // Another agent claimed it first - use their center
+                        var center = MultiAgentCoordinator.GetHellevatorCenter();
+                        if (center.HasValue)
+                        {
+                            InitializePosition(center.Value);
+                        }
+                        else
+                        {
+                            InitializePosition(currentTileX);
+                        }
+                    }
+                }
             }
 
             // Check if NPC is touching ash blocks (indicates underworld reached)
             if (IsTouchingAsh(npc))
             {
+                // Release hellevator claim when complete
+                if (_agentWhoAmI >= 0)
+                {
+                    MultiAgentCoordinator.ReleaseHellevator(_agentWhoAmI);
+                }
                 return AgentActionResult.Success($"Reached underworld - touching ash blocks at depth Y={currentTileY}");
+            }
+
+            // Random jumping to prevent stacking with other agents
+            if (HasNearbyAgents(npc) && MovementHelper.IsOnGround(npc))
+            {
+                int currentTick = (int)Main.GameUpdateCount;
+                if (currentTick - _lastJumpTick >= JUMP_COOLDOWN_TICKS)
+                {
+                    var random = new Random(npc.whoAmI + currentTick);
+                    if (random.NextDouble() < JUMP_CHANCE)
+                    {
+                        npc.velocity.Y = -6f; // Small jump
+                        _lastJumpTick = currentTick;
+                    }
+                }
             }
 
             // Mark as initialized
@@ -256,6 +336,11 @@ namespace TerrarAI.Content.Actions
             // Check if NPC is touching ash blocks (indicates underworld reached)
             if (IsTouchingAsh(context.Agent))
             {
+                // Release hellevator claim when complete
+                if (_agentWhoAmI >= 0)
+                {
+                    MultiAgentCoordinator.ReleaseHellevator(_agentWhoAmI);
+                }
                 return AgentActionResult.Success($"Reached underworld - touching ash blocks at depth Y={currentTargetY}");
             }
 
@@ -326,6 +411,48 @@ namespace TerrarAI.Content.Actions
 
             // Check if tile is solid and can be mined
             return Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
+        }
+
+        private bool HasNearbyAgents(NPC agent)
+        {
+            if (agent == null)
+            {
+                return false;
+            }
+
+            int agentTileX = (int)(agent.Center.X / 16f);
+            int agentTileY = (int)(agent.Center.Y / 16f);
+            int agentWhoAmI = agent.whoAmI;
+
+            // Check all active AIAgentNPCs
+            var agentType = ModContent.NPCType<AIAgentNPC>();
+            for (int i = 0; i < Main.maxNPCs; i++)
+            {
+                var npc = Main.npc[i];
+                if (npc == null || !npc.active || npc.type != agentType || npc.whoAmI == agentWhoAmI)
+                {
+                    continue;
+                }
+
+                int otherTileX = (int)(npc.Center.X / 16f);
+                int otherTileY = (int)(npc.Center.Y / 16f);
+
+                // Check if within 2 tiles horizontally (same hellevator column)
+                int horizontalDistance = Math.Abs(otherTileX - agentTileX);
+                if (horizontalDistance > 2)
+                {
+                    continue;
+                }
+
+                // Check if within 3 tiles vertically (could stack)
+                int verticalDistance = Math.Abs(otherTileY - agentTileY);
+                if (verticalDistance <= 3)
+                {
+                    return true; // Found nearby agent
+                }
+            }
+
+            return false;
         }
 
         public static AgentAction CreateFromParameters(JsonElement parameters, ActionValidator validator)
