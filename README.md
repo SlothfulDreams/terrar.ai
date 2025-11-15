@@ -2,6 +2,8 @@
 
 An AI-powered agent mod for Terraria tModLoader that lets you spawn intelligent NPCs capable of understanding and executing natural language commands.
 
+https://github.com/user-attachments/assets/67f0fc44-abfc-4884-83d4-9293c090899d
+
 ## Features
 
 - Spawn AI agents that can understand natural language instructions
@@ -9,6 +11,7 @@ An AI-powered agent mod for Terraria tModLoader that lets you spawn intelligent 
 - AI-powered planning system using xAI (Grok) for complex task breakdown
 - Real-time agent status tracking and feedback
 - Chat-based command interface
+
 
 ## Installation
 
