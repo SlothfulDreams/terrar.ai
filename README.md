@@ -22,62 +22,101 @@ https://github.com/user-attachments/assets/67f0fc44-abfc-4884-83d4-9293c090899d
 
 ## Getting Started
 
-### Step 1: Create an Agent
+### Step 1: Spawn Agents
 
 1. Press **T** or **Enter** to open Terraria's chat
-2. Type one of the following:
+2. Type a spawn command:
    ```
-   /create
-   ```
-   Or with a custom name:
-   ```
-   /create Builder
-   /create Miner Bot
+   /ai spawn an agent
+   /ai spawn 5 agents
+   /ai create 3 agents
    ```
 3. Press **Enter** to execute the command
-4. An AI agent will appear near your character
-5. You should see a chat message: "[Agent] Planning: [your spawned agent]"
+4. AI agents will appear near your character
 
-**Note:** Only the server host can create agents (in singleplayer, you are the host).
+**Note:** Only the server host can spawn agents (in singleplayer, you are the host).
 
-### Step 2: Command Your Agent
+### Step 2: Command Your Agents
 
-Once you have created an agent, give it commands using chat:
+Once you have spawned agents, give them commands using chat:
 
 1. Press **T** or **Enter** to open chat
 2. Type your command:
    ```
-   /action Go gather some wood
-   /action Build a 10 block tall tower
-   /action Mine some iron ore
+   /ai gather some wood
+   /ai build a 10 block tall tower
+   /ai two agents mine iron ore
+   /ai all agents dig down
    ```
 3. Press **Enter** to send
 
-You'll see chat messages from the agent as it plans and executes your commands.
+You'll see chat messages from the agents as they plan and execute your commands.
+
+**Agent Selection:** You can specify how many agents should perform a task:
+- `/ai two agents chop trees` - The 2 closest agents will perform the task
+- `/ai one agent mine copper` - Only the nearest agent will perform the task
+- `/ai gather wood` - All agents will perform the task (default)
 
 ## Command Reference
 
-### Chat Commands
+### Main Command: `/ai`
 
-All commands are typed in Terraria's chat (press T or Enter first):
+All agent management uses the `/ai` command with natural language:
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/create [name]` | Creates a new AI agent near you | `/create Miner` |
-| `/action <task>` | Sends a task to the nearest agent | `/action Gather wood` |
-| `/remove [all]` | Removes the nearest agent or all agents | `/remove all` |
-| `/testxai` | Test your xAI API connection | `/testxai` |
+```
+/ai <natural language instruction>
+```
+
+The AI understands your intent and routes commands appropriately.
+
+#### Spawning Agents
+```
+/ai spawn an agent
+/ai spawn 5 agents
+/ai create 10 agents
+```
+
+#### Commanding Agents
+```
+/ai gather some wood
+/ai build a tower
+/ai two agents chop trees
+/ai one agent mine copper ore
+/ai all agents dig down
+```
+
+#### Recalling Agents
+```
+/ai recall
+/ai come back
+/ai return to me
+```
+
+#### Dismissing Agents
+```
+/ai dismiss all agents
+```
+
+### Other Commands
+
+| Command | Description |
+|---------|-------------|
+| `/testxai` | Test your xAI API connection |
 
 ## Common Workflow
 
 ```
-1. Press T → Type /create → Press Enter
+1. Press T → Type /ai spawn 3 agents → Press Enter
    ↓
-2. Agent spawns and confirms in chat
+2. Agents spawn near you
    ↓
-3. Press T → Type /action Gather some wood → Press Enter
+3. Press T → Type /ai gather some wood → Press Enter
    ↓
-4. Agent plans and executes (you'll see status updates in chat)
+4. Agents plan and execute (you'll see status updates in chat)
+   ↓
+5. Press T → Type /ai recall → Press Enter
+   ↓
+6. Agents return to your position
 ```
 
 ## Agent Chat Messages
@@ -86,7 +125,7 @@ The agent will send you chat messages to keep you informed:
 
 **When planning starts:**
 ```
-[Agent] Planning: "Go gather some wood"
+[Agent] Planning: "gather some wood"
 ```
 
 **When planning completes:**
@@ -132,12 +171,11 @@ Before spawning agents, test your xAI API connection:
 
 ### "No agent nearby" Error
 
-**Cause:** No agent within 960 pixels of you when you ran `/action`
+**Cause:** No agents exist when you tried to give a command
 
 **Solution:**
-- Create an agent first with `/create`
-- Move closer to your existing agent
-- The command targets the nearest agent within range
+- Spawn agents first with `/ai spawn 3 agents`
+- The system automatically routes commands to existing agents
 
 ### Agent Not Responding
 
