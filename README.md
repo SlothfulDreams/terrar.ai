@@ -1,4 +1,4 @@
-# TerrarAI
+# TerrarAI (1st Place at HackPrinceton - xAI Track)
 
 An AI-powered agent mod for Terraria tModLoader that lets you spawn intelligent NPCs capable of understanding and executing natural language commands.
 
